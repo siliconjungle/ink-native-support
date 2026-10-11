@@ -48,6 +48,10 @@ impl<T:Clone> OwnedBuffer<T> {
         let mut xs=self.freeze();xs.push(value);Self::new(xs)
     }
     pub fn split(self,at:u32)->(Self,Self){
+        if at==0 || at>=self.len(){
+            let empty=if matches!(&self.0,InkBufferStorage::Shared{..}){Self::shared(Vec::new())}else{Self::new(Vec::new())};
+            return if at==0 {(empty,self)}else{(self,empty)}
+        }
         let (data,start,end)=match self.0 {
             InkBufferStorage::Owned(xs)=>{let end=xs.len();(std::rc::Rc::new(std::cell::RefCell::new(xs)),0,end)},
             InkBufferStorage::Shared{data,start,end}=>(data,start,end),
