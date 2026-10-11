@@ -457,6 +457,7 @@ impl InkContext {
             return Ok(match method {
                 "values" => V::List(t.values().cloned().collect()),
                 "keys" => V::List(t.keys().cloned().collect()),
+                "scan_get" => t.get(&a[0]).cloned().ok_or("scan key absent")?,
                 "get" => V::Option(t.get(&a[0]).cloned().map(Box::new)),
                 "contains" => V::Bool(t.contains_key(&a[0])),
                 "remove" => {
@@ -807,6 +808,24 @@ pub unsafe extern "C" fn ink_op(
     } else {
         c.result(r)
     }
+}
+// Frames scope only transient value handles. Tables, journals, events and
+// captures before the frame are independent owned values and remain untouched.
+#[no_mangle]
+pub unsafe extern "C" fn ink_value_frame(ctx:*mut InkContext)->u64 {
+    let c=&*ctx;
+    ((c.arena_bytes as u64)<<32)|(c.values.len() as u64)
+}
+#[no_mangle]
+pub unsafe extern "C" fn ink_value_finish_frame(ctx:*mut InkContext,frame:u64,value:u64)->u64 {
+    let c=&mut *ctx;let length=frame as u32 as usize;let bytes=(frame>>32)as usize;
+    if length>c.values.len() || bytes>c.arena_bytes {return c.fail("invalid value frame".into());}
+    let result=if value>>32==0 && value>0 {
+        let index=(value-1)as usize;
+        if index>=c.values.len(){return c.fail("invalid value handle".into());}
+        if index>=length {Ok(std::mem::replace(&mut c.values[index],V::Unit))}else{c.value(value)}
+    }else{c.value(value)};
+    c.values.truncate(length);c.arena_bytes=bytes;c.result(result)
 }
 #[no_mangle]
 pub unsafe extern "C" fn ink_item(ctx: *mut InkContext, h: u64, i: usize) -> u64 {
