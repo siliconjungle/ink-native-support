@@ -458,10 +458,10 @@ impl InkContext {
                     let V::List(values) = &a[1] else { return Err("bulk values".into()); };
                     if keys.len() != values.len() { return Ok(V::Result(false, Box::new(V::String("table bulk length mismatch".into())))); }
 
-                    for (key, value) in keys.iter().zip(values) { let old=self.tables[index].insert(key.clone(), value.clone()); self.undo.push(Undo {index, key:key.clone(), old}); }
+                    for (key, value) in keys.iter().zip(values) { let old=self.tables[index].insert(key.clone(), value.clone()); self.undo.entry((index, key.clone())).or_insert(old); }
                     return Ok(V::Result(true, Box::new(V::Unit)));
                 }
-                for key in keys { if let Some(old)=self.tables[index].remove(key) { self.undo.push(Undo {index,key:key.clone(),old:Some(old)}); } }
+                for key in keys { if let Some(old)=self.tables[index].remove(key) { self.undo.entry((index,key.clone())).or_insert(Some(old)); } }
                 return Ok(V::Unit);
             }
             let t = self.tables.get_mut(index).ok_or("table index")?;
@@ -1075,7 +1075,6 @@ impl State {
                         .collect::<Vec<_>>();
                     let wire = events.iter().map(Event::to_json).collect::<Vec<_>>();
                     self.ctx.outbox.extend(events);
-                    self.ctx.undo.clear();
                     self.ctx.values.clear();
                     Ok(json!({"result":result,"committed":true,"version":next,"events":wire}))
                 } else {
