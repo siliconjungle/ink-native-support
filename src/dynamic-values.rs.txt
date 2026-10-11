@@ -893,8 +893,10 @@ pub unsafe extern "C" fn ink_finish_action(ctx: *mut InkContext, h: u64) -> u64 
         None => h,
     }
 }
+struct HostTransaction { version: u64, removed: Vec<Event> }
 pub struct State {
     ctx: Box<InkContext>,
+    host: Option<HostTransaction>,
 }
 impl State {
     pub fn parallel_statistics()->Json{let(n,ids,last)=ink_parallel_statistics();json!({"workers":n,"workerIds":ids,"lastWorkerIds":last})}
@@ -903,6 +905,7 @@ impl State {
             serde_json::from_str(include_str!("metadata.json")).expect("compiled metadata");
         let count = meta["roots"].as_array().unwrap().len();
         Self {
+            host: None,
             ctx: Box::new(InkContext {
                 meta,
                 tables: vec![BTreeMap::new(); count],
@@ -1014,7 +1017,7 @@ impl State {
                         }
                         transaction::Decision::Commit { version } => version,
                     };
-                    self.ctx.undo.clear();
+                    if self.host.is_none() { self.ctx.undo.clear(); }
                     self.ctx.version = next;
                     let events = transaction::publish(next, self.ctx.staged.drain(..))
                         .map(|p| {
@@ -1052,10 +1055,23 @@ impl State {
     pub fn outbox(&self) -> &[Event] {
         &self.ctx.outbox
     }
+    pub fn begin_transaction(&mut self) -> R<bool> {
+        if self.host.is_some() || !self.ctx.undo.is_empty() || !self.ctx.staged.is_empty() { return Err("transaction already in progress".into()); }
+        self.host = Some(HostTransaction { version: self.ctx.version, removed: vec![] }); Ok(true)
+    }
+    pub fn commit_transaction(&mut self) { self.host = None; self.ctx.undo.clear(); }
+    pub fn rollback_transaction(&mut self) {
+        if let Some(host) = self.host.take() {
+            self.ctx.rollback(); self.ctx.version = host.version;
+            self.ctx.outbox.retain(|e| e.commit <= host.version);
+            let mut restored = host.removed; restored.append(&mut self.ctx.outbox); self.ctx.outbox = restored;
+        }
+    }
     pub fn acknowledge_through(&mut self, commit: u64, position: u64) {
-        self.ctx
-            .outbox
-            .retain(|e| (e.commit, e.position) > (commit, position));
+        for e in std::mem::take(&mut self.ctx.outbox) {
+            if (e.commit, e.position) > (commit, position) { self.ctx.outbox.push(e); }
+            else if let Some(host) = &mut self.host { host.removed.push(e); }
+        }
     }
     pub fn checkpoint(&self) -> R<Vec<u8>> {
         self.checkpoint_with_limits(portable::Limits::default())
