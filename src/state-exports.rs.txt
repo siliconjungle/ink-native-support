@@ -282,6 +282,22 @@ mod state_wasm {
             }
         })
     }
+    // Optional ABI-v1 retained-operation extension. Older hosts may ignore it.
+    #[no_mangle]
+    pub extern "C" fn lang_transaction_begin(state:u32)->u32 {
+        REGISTRY.with(|r| {let mut r=r.borrow_mut();
+            let result=r.states.get_mut(&state).ok_or_else(||"unknown state handle".to_owned()).and_then(|s|s.begin_transaction());
+            match result {Ok(true)=>1,Ok(false)=>2,Err(e)=>r.fail(e)}
+        })
+    }
+    #[no_mangle]
+    pub extern "C" fn lang_transaction_commit(state:u32)->u32 {
+        REGISTRY.with(|r| {let mut r=r.borrow_mut();match r.states.get_mut(&state){Some(s)=>{s.commit_transaction();1},None=>r.fail("unknown state handle")}})
+    }
+    #[no_mangle]
+    pub extern "C" fn lang_transaction_rollback(state:u32)->u32 {
+        REGISTRY.with(|r| {let mut r=r.borrow_mut();match r.states.get_mut(&state){Some(s)=>{s.rollback_transaction();1},None=>r.fail("unknown state handle")}})
+    }
     #[no_mangle]
     pub extern "C" fn lang_version(state: u32) -> u64 {
         REGISTRY.with(|r| {
