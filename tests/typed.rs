@@ -38,3 +38,6 @@ fn shared_typed_support_preserves_wire_bits_and_owned_values() {
         json!([{"Some":18446744073709551615u64},{"None":null}])
     );
 }
+
+#[test]
+fn stable_owned_compaction(){assert_eq!(OwnedBuffer::new(vec![1u32,9,2,4]).filter_inplace(|x|x>2).freeze(),vec![9,4]);assert!(OwnedBuffer::new(Vec::<u32>::new()).filter_inplace(|_|true).freeze().is_empty());}
