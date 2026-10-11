@@ -14,10 +14,12 @@ impl<T:Clone> OwnedBuffer<T> {
     pub fn shared(xs:Vec<T>)->Self { let end=xs.len();Self(InkBufferStorage::Shared{data:std::rc::Rc::new(std::cell::RefCell::new(xs)),start:0,end}) }
     fn read<R>(&self,f:impl FnOnce(&[T])->R)->R {match &self.0 {
         InkBufferStorage::Owned(xs)=>f(xs),
+        InkBufferStorage::Shared{start,end,..} if start==end=>f(&[]),
         InkBufferStorage::Shared{data,start,end}=>f(&data.borrow()[*start..*end]),
     }}
     fn edit<R>(&mut self,f:impl FnOnce(&mut [T])->R)->R {match &mut self.0 {
         InkBufferStorage::Owned(xs)=>f(xs),
+        InkBufferStorage::Shared{start,end,..} if start==end=>f(&mut []),
         InkBufferStorage::Shared{data,start,end}=>f(&mut data.borrow_mut()[*start..*end]),
     }}
     pub fn len(&self)->u32 {let n=match &self.0 {InkBufferStorage::Owned(xs)=>xs.len(),InkBufferStorage::Shared{start,end,..}=>end-start};n.try_into().expect("buffer exceeds u32")}
@@ -46,6 +48,10 @@ impl<T:Clone> OwnedBuffer<T> {
         let mut xs=self.freeze();xs.push(value);Self::new(xs)
     }
     pub fn split(self,at:u32)->(Self,Self){
+        if at==0 || at>=self.len(){
+            let empty=if matches!(&self.0,InkBufferStorage::Shared{..}){Self::shared(Vec::new())}else{Self::new(Vec::new())};
+            return if at==0 {(empty,self)}else{(self,empty)}
+        }
         let (data,start,end)=match self.0 {
             InkBufferStorage::Owned(xs)=>{let end=xs.len();(std::rc::Rc::new(std::cell::RefCell::new(xs)),0,end)},
             InkBufferStorage::Shared{data,start,end}=>(data,start,end),
@@ -64,8 +70,18 @@ impl<T:Clone> OwnedBuffer<T> {
         }
         let mut xs=left.freeze();xs.append(&mut rhs);Self::new(xs)
     }
+    // Opaque handles obey checked source moves. Other nonempty aliases are
+    // dead after this transfer; empty scoped partitions remain usable.
+    pub fn freeze_handle(self)->Vec<T>{
+        if let InkBufferStorage::Shared{data,start,end}=&self.0 {
+            if start==end{return Vec::new()}
+            if *start==0&&*end==data.borrow().len(){return std::mem::take(&mut *data.borrow_mut())}
+        }
+        self.freeze()
+    }
     pub fn freeze(self)->Vec<T>{match self.0 {
         InkBufferStorage::Owned(xs)=>xs,
+        InkBufferStorage::Shared{start,end,..} if start==end=>Vec::new(),
         InkBufferStorage::Shared{data,start,end}=>match std::rc::Rc::try_unwrap(data) {
             Ok(cell)=>{let mut xs=cell.into_inner();xs.truncate(end);if start==0{xs}else{xs.drain(..start);xs}},
             Err(data)=>data.borrow()[start..end].to_vec(),

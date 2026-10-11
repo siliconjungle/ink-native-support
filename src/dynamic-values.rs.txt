@@ -383,7 +383,7 @@ impl InkContext {
             let V::Buffer(b)=a[0].clone() else{return Err("buffer receiver".into())};
             let index=|v:&V|->R<u32>{if let V::U32(x)=v{Ok(*x)}else{Err("buffer index".into())}};
             return Ok(match method {
-                "len"=>V::U32(b.len()),"freeze"=>V::List(b.freeze()),"pop"=>V::Buffer(b.pop()),
+                "len"=>V::U32(b.len()),"freeze"=>V::List(b.freeze_handle()),"pop"=>V::Buffer(b.pop()),
                 "contains"=>V::Bool(index(&a[1])?<b.len()),"get"=>b.get(index(&a[1])?).ok_or("buffer index outside bounds")?,
                 "set"=>V::Buffer(b.set(index(&a[1])?,a[2].clone())),"swap"=>V::Buffer(b.swap(index(&a[1])?,index(&a[2])?)),
                 "push"=>{if b.len()>=1000000{return Err("temporary allocation limit exceeded".into())};let weight=a[1].weight();if weight>64*1024*1024-self.arena_bytes{return Err("temporary allocation limit exceeded".into())};self.arena_bytes+=weight;V::Buffer(b.push(a[1].clone()))},

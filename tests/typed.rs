@@ -75,3 +75,14 @@ fn dynamic_full_owner_growth_does_not_clone_previous_elements(){
  assert_eq!(owner.len(),128);assert_eq!(n.get(),0);drop(handles);assert_eq!(owner.freeze().len(),128);assert_eq!(n.get(),0);
  let map=OwnedMap::shared().set(7u32,Item(n.clone()));let handle=map.clone();assert_eq!(n.get(),0);assert!(handle.contains(&7));
 }
+
+#[test]
+fn affine_handle_release_transfers_full_storage_and_preserves_empty_views(){
+ #[derive(Debug)]struct Item(std::rc::Rc<std::cell::Cell<u32>>);
+ impl Clone for Item{fn clone(&self)->Self{self.0.set(self.0.get()+1);Self(self.0.clone())}}
+ let n=std::rc::Rc::new(std::cell::Cell::new(0));let owner=OwnedBuffer::shared((0..16).map(|_|Item(n.clone())).collect());
+ let dead_handle=owner.clone();let xs=owner.freeze_handle();assert_eq!(xs.len(),16);assert_eq!(n.get(),0);drop(dead_handle);
+ let(a,b)=OwnedBuffer::shared(vec![1u32,2,3]).split(u32::MAX);
+ assert_eq!(a.freeze_handle(),vec![1,2,3]);assert_eq!(b.get(0),None);
+ assert_eq!(b.set(0,99).push(7).freeze(),vec![7]);
+}
