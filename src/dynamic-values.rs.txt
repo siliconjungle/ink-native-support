@@ -242,7 +242,6 @@ enum Failure {
     Host(String),
     Abort(V),
 }
-struct Undo { index: usize, key: V, old: Option<V> }
 pub struct InkContext {
     values: Vec<V>,
     error: Option<Failure>,
@@ -250,7 +249,7 @@ pub struct InkContext {
     arena_bytes: usize,
     meta: Json,
     tables: Vec<BTreeMap<V, V>>,
-    undo: Vec<Undo>,
+    undo: BTreeMap<(usize, V), Option<V>>,
     version: u64,
     staged: Vec<(String, V)>,
     outbox: Vec<Event>,
@@ -269,7 +268,7 @@ impl Event {
 }
 impl InkContext {
     fn rollback(&mut self) {
-        while let Some(Undo { index, key, old }) = self.undo.pop() {
+        while let Some(((index, key), old)) = self.undo.pop_last() {
             match old {
                 Some(value) => { self.tables[index].insert(key, value); }
                 None => { self.tables[index].remove(&key); }
@@ -449,7 +448,7 @@ impl InkContext {
                 "remove" => {
                     let old = t.remove(&a[0]);
                     let result = V::Option(old.clone().map(Box::new));
-                    if old.is_some() { self.undo.push(Undo { index, key: a[0].clone(), old }); }
+                    if old.is_some() { self.undo.entry((index, a[0].clone())).or_insert(old); }
                     result
                 },
                 "insert" => {
@@ -458,7 +457,7 @@ impl InkContext {
                     }
                     let key = a[0].clone();
                     let old = t.insert(key.clone(), a[1].clone());
-                    self.undo.push(Undo { index, key, old });
+                    self.undo.entry((index, key)).or_insert(old);
                     V::Unit
                 }
                 "replace" => {
@@ -467,7 +466,7 @@ impl InkContext {
                     }
                     let key = a[0].clone();
                     let old = t.insert(key.clone(), a[1].clone());
-                    self.undo.push(Undo { index, key, old });
+                    self.undo.entry((index, key)).or_insert(old);
                     V::Unit
                 }
                 _ => return Err("table method".into()),
@@ -688,7 +687,7 @@ pub unsafe extern "C" fn ink_parallel(ctx:*mut InkContext,input:u64,grain:u32,ca
         let run=|start:usize,xs:&[FrozenV]|->R<Vec<FrozenV>>{
             struct Guard(u32);impl Drop for Guard{fn drop(&mut self){PARALLEL_DEPTH.with(|d|d.set(self.0));}}
             let _guard=Guard(PARALLEL_DEPTH.with(|d|{let old=d.get();d.set(old+1);old}));
-            let mut local=InkContext{values:vec![],error:None,fuel:100000000,arena_bytes:0,meta:meta.clone(),tables:vec![],undo:vec![],version:0,staged:vec![],outbox:vec![]};
+            let mut local=InkContext{values:vec![],error:None,fuel:100000000,arena_bytes:0,meta:meta.clone(),tables:vec![],undo:BTreeMap::new(),version:0,staged:vec![],outbox:vec![]};
             let captures=captures.iter().cloned().map(|v|local.put(v.value())).collect::<Vec<_>>();
             let mut out=Vec::with_capacity(xs.len());
             for (i,item) in xs.iter().enumerate(){
@@ -906,7 +905,7 @@ impl State {
             ctx: Box::new(InkContext {
                 meta,
                 tables: vec![BTreeMap::new(); count],
-                undo: vec![],
+                undo: BTreeMap::new(),
                 values: vec![],
                 error: None,
                 fuel: 100000000,
