@@ -632,25 +632,24 @@ pub unsafe extern "C" fn ink_literal(
         return 0;
     }
     let r = (|| -> R<V> {
-        Ok(match kind {
-            0 => V::Unit,
-            1 => V::Bool(n != 0),
-            2 => V::U32(n as u32),
-            3 => V::U64(n),
-            4 => V::I32(n as i32),
-            5 => V::F32(n as u32),
-            6 => V::Int(BigInt::from(n)),
-            7 | 8 => {
+        Ok(match InkValueKind::from_raw(kind).ok_or("invalid literal kind")? {
+            InkValueKind::Unit => V::Unit,
+            InkValueKind::Bool => V::Bool(n != 0),
+            InkValueKind::U32 => V::U32(n as u32),
+            InkValueKind::U64 => V::U64(n),
+            InkValueKind::I32 => V::I32(n as i32),
+            InkValueKind::F32 => V::F32(n as u32),
+            InkValueKind::Int => V::Int(BigInt::from(n)),
+            tag @ (InkValueKind::String | InkValueKind::Enum) => {
                 let text = std::str::from_utf8(std::slice::from_raw_parts(text as *const u8, len))
                     .map_err(|_| "invalid UTF-8")?
                     .to_owned();
-                if kind == 7 {
+                if tag == InkValueKind::String {
                     V::String(text)
                 } else {
                     V::Enum(text)
                 }
             }
-            _ => return Err("invalid literal kind".into()),
         })
     })();
     c.result(r)

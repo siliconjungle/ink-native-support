@@ -6,6 +6,9 @@ impl<T: Clone> OwnedBuffer<T> {
     pub fn new(xs: Vec<T>) -> Self {
         Self(xs)
     }
+    pub fn map_inplace(mut self,mut f:impl FnMut(T)->T)->Self {for x in &mut self.0{*x=f(x.clone());}self}
+    pub fn map_indexed_inplace(mut self,mut f:impl FnMut(u32,T)->T)->Self {for(i,x)in self.0.iter_mut().enumerate(){*x=f(i as u32,x.clone());}self}
+    pub fn scan_inplace(mut self,mut acc:T,mut add:impl FnMut(T,T)->T)->Self {for x in &mut self.0{acc=add(acc,x.clone());*x=acc.clone();}self}
     pub fn len(&self) -> u32 {
         self.0.len().try_into().expect("buffer exceeds u32")
     }

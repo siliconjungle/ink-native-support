@@ -28,6 +28,8 @@ fn shared_typed_support_preserves_wire_bits_and_owned_values() {
         OwnedBuffer::new(vec![1u32, 2, 3]).set(1, 9).freeze(),
         vec![1, 9, 3]
     );
+    assert_eq!(OwnedBuffer::new(vec![u32::MAX,1,2]).scan_inplace(0u32,u32::wrapping_add).freeze(),vec![u32::MAX,0,2]);
+    assert_eq!(OwnedBuffer::new(vec![4u32,4,4]).map_indexed_inplace(|i,x|i+x).freeze(),vec![4,5,6]);
     let value =
         <Vec<Option<u64>>>::from_json(&json!([{"Some":18446744073709551615u64},{"None":null}]))
             .unwrap();
