@@ -441,9 +441,35 @@ impl InkContext {
         if let Some(table) = op.strip_prefix("table:") {
             let (index, method) = table.split_once(':').ok_or("table operation")?;
             let index = index.parse::<usize>().map_err(|_| "table index")?;
+            if let Some(other)=method.strip_prefix("intersect_table:") {
+                let other=other.parse::<usize>().map_err(|_|"table index")?;
+                let a=self.tables.get(index).ok_or("table index")?;
+                let b=self.tables.get(other).ok_or("table index")?;
+                let (small,large)=if a.len()<=b.len(){(a,b)}else{(b,a)};
+                return Ok(V::List(small.keys().filter(|k|large.contains_key(*k)).cloned().collect()));
+            }
+            if method == "intersect_keys" {
+                let V::List(keys) = &a[0] else { return Err("bulk keys".into()); };
+                let selected: std::collections::BTreeSet<_> = keys.iter().collect();
+                return Ok(V::List(self.tables[index].keys().filter(|k| selected.contains(k)).cloned().collect()));
+            }
+            if method == "put_many" || method == "remove_many" {
+                let V::List(keys) = &a[0] else { return Err("bulk keys".into()); };
+                if method == "put_many" {
+                    let V::List(values) = &a[1] else { return Err("bulk values".into()); };
+                    if keys.len() != values.len() { return Ok(V::Result(false, Box::new(V::String("table bulk length mismatch".into())))); }
+
+                    for (key, value) in keys.iter().zip(values) { let old=self.tables[index].insert(key.clone(), value.clone()); self.undo.push(Undo {index, key:key.clone(), old}); }
+                    return Ok(V::Result(true, Box::new(V::Unit)));
+                }
+                for key in keys { if let Some(old)=self.tables[index].remove(key) { self.undo.push(Undo {index,key:key.clone(),old:Some(old)}); } }
+                return Ok(V::Unit);
+            }
             let t = self.tables.get_mut(index).ok_or("table index")?;
             return Ok(match method {
                 "values" => V::List(t.values().cloned().collect()),
+                "keys" => V::List(t.keys().cloned().collect()),
+                "scan_get" => t.get(&a[0]).cloned().ok_or("scan key absent")?,
                 "get" => V::Option(t.get(&a[0]).cloned().map(Box::new)),
                 "contains" => V::Bool(t.contains_key(&a[0])),
                 "remove" => {
@@ -461,8 +487,8 @@ impl InkContext {
                     self.undo.push(Undo { index, key, old });
                     V::Unit
                 }
-                "replace" => {
-                    if !t.contains_key(&a[0]) {
+                "replace" | "put" => {
+                    if method == "replace" && !t.contains_key(&a[0]) {
                         return Err("replace key absent".into());
                     }
                     let key = a[0].clone();
@@ -799,6 +825,24 @@ pub unsafe extern "C" fn ink_op(
         c.result(r)
     }
 }
+// Frames scope only transient value handles. Tables, journals, events and
+// captures before the frame are independent owned values and remain untouched.
+#[no_mangle]
+pub unsafe extern "C" fn ink_value_frame(ctx:*mut InkContext)->u64 {
+    let c=&*ctx;
+    ((c.arena_bytes as u64)<<32)|(c.values.len() as u64)
+}
+#[no_mangle]
+pub unsafe extern "C" fn ink_value_finish_frame(ctx:*mut InkContext,frame:u64,value:u64)->u64 {
+    let c=&mut *ctx;let length=frame as u32 as usize;let bytes=(frame>>32)as usize;
+    if length>c.values.len() || bytes>c.arena_bytes {return c.fail("invalid value frame".into());}
+    let result=if value>>32==0 && value>0 {
+        let index=(value-1)as usize;
+        if index>=c.values.len(){return c.fail("invalid value handle".into());}
+        if index>=length {Ok(std::mem::replace(&mut c.values[index],V::Unit))}else{c.value(value)}
+    }else{c.value(value)};
+    c.values.truncate(length);c.arena_bytes=bytes;c.result(result)
+}
 #[no_mangle]
 pub unsafe extern "C" fn ink_item(ctx: *mut InkContext, h: u64, i: usize) -> u64 {
     let c = &mut *ctx;
@@ -1032,6 +1076,7 @@ impl State {
                         .collect::<Vec<_>>();
                     let wire = events.iter().map(Event::to_json).collect::<Vec<_>>();
                     self.ctx.outbox.extend(events);
+                    self.ctx.undo.clear();
                     self.ctx.values.clear();
                     Ok(json!({"result":result,"committed":true,"version":next,"events":wire}))
                 } else {

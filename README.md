@@ -17,3 +17,5 @@ implementations and their toolchains remain part of the trusted execution bounda
 checks exact float bits, integer boundaries, tagged values and owned collections.
 Distribution conformance additionally compiles complete C/Rust applications and
 checks their actions, snapshots and Wasm exports against the reference evaluator.
+
+`INDEXED_TABLE_RUST_SOURCE` supplies optional contiguous row slots with an ordered key-to-slot index. Keys and public views stay ordered; swap removal repairs moved slots. The C dynamic runtime uses touched-row rollback journals and retains its ordered-map storage. These primitives are trusted implementations, independently tested against std BTreeMap and distribution histories.
