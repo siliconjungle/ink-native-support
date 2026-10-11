@@ -6,3 +6,4 @@ pub const STATE_EXPORTS_RUST_SOURCE: &str = include_str!("state-exports.rs.txt")
 pub const REPRESENTATION_EXPORTS_RUST_SOURCE: &str = include_str!("representation-exports.rs.txt");
 
 pub const INDEXED_TABLE_RUST_SOURCE: &str = include_str!("indexed-table.rs.txt");
+pub const CONTINUATION_FRAMES_RUST_SOURCE: &str = include_str!("continuation-frames.rs.txt");

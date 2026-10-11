@@ -1,0 +1,14 @@
+// Internal typed-continuation storage. Callers retain the exact old layout and
+// return each allocation once; no knowledge objects or executable syntax live here.
+#[no_mangle]
+pub unsafe extern "C" fn ink_native_frames_resize(pointer:*mut u8,old_bytes:usize,new_bytes:usize,alignment:usize)->*mut u8 {
+    if old_bytes>64_000_000 || new_bytes>64_000_000 || alignment==0 || !alignment.is_power_of_two() || alignment>4096 {return std::ptr::null_mut();}
+    if pointer.is_null() {
+        if old_bytes!=0 || new_bytes==0 {return std::ptr::null_mut();}
+        return match std::alloc::Layout::from_size_align(new_bytes,alignment) {Ok(layout)=>std::alloc::alloc(layout),Err(_)=>std::ptr::null_mut()};
+    }
+    let Ok(old)=std::alloc::Layout::from_size_align(old_bytes,alignment)else{return std::ptr::null_mut();};
+    if old_bytes==0{return std::ptr::null_mut();}
+    if new_bytes==0 {std::alloc::dealloc(pointer,old);return std::ptr::null_mut();}
+    std::alloc::realloc(pointer,old,new_bytes)
+}
