@@ -342,15 +342,26 @@ impl InkContext {
         }
     }
     fn primitive(&mut self, op: &str, a: &mut [V]) -> R<V> {
+        if ["word_not","word_and","word_or","word_xor","wrapping_shl","wrapping_shr","rotate_left","rotate_right"].contains(&op) {
+            macro_rules! apply {($x:expr,$variant:ident)=>{{
+                let x=*$x;
+                let r=if op=="word_not" {!x} else if ["wrapping_shl","wrapping_shr","rotate_left","rotate_right"].contains(&op) {
+                    let V::U32(k)=a[1] else{return Err("word shift count".into())};
+                    match op {"wrapping_shl"=>x.wrapping_shl(k),"wrapping_shr"=>x.wrapping_shr(k),"rotate_left"=>x.rotate_left(k),_=>x.rotate_right(k)}
+                } else {let V::$variant(y)=a[1] else{return Err("word operand type".into())};match op {"word_and"=>x&y,"word_or"=>x|y,_=>x^y}};
+                V::$variant(r)
+            }};}
+            return Ok(match &a[0] {V::U32(x)=>apply!(x,U32),V::U64(x)=>apply!(x,U64),V::I32(x)=>apply!(x,I32),_=>return Err("word type".into())});
+        }
         if op=="list_length" {let V::List(xs)=&a[0] else{return Err("list length".into())};return Ok(V::U32(xs.len().try_into().map_err(|_|"list exceeds u32")?));}
-        if op=="buffer_empty" {return Ok(V::Buffer(OwnedBuffer::new(vec![])));}
-        if op=="map_empty" {return Ok(V::Map(OwnedMap::new()));}
-        if op=="buffer_new" {let V::List(xs)=std::mem::replace(&mut a[0],V::Unit) else{return Err("buffer list".into())};return Ok(V::Buffer(OwnedBuffer::new(xs)));}
+        if op=="buffer_empty" {return Ok(V::Buffer(OwnedBuffer::shared(vec![])));}
+        if op=="map_empty" {return Ok(V::Map(OwnedMap::shared()));}
+        if op=="buffer_new" {let V::List(xs)=std::mem::replace(&mut a[0],V::Unit) else{return Err("buffer list".into())};return Ok(V::Buffer(OwnedBuffer::shared(xs)));}
         if op=="buffer_fill" {
             let V::U32(n)=a[0] else{return Err("buffer length".into())};if n>1000000{return Err("temporary allocation limit exceeded".into())};
             let weight=(n as usize).checked_mul(a[1].weight()).ok_or("temporary allocation limit exceeded")?;
             if weight>64*1024*1024-self.arena_bytes{return Err("temporary allocation limit exceeded".into())};self.arena_bytes+=weight;
-            return Ok(V::Buffer(OwnedBuffer::new(vec![a[1].clone();n as usize])));
+            return Ok(V::Buffer(OwnedBuffer::shared(vec![a[1].clone();n as usize])));
         }
         if op=="buffer_split" {
             let V::Buffer(b)=a[0].clone() else{return Err("buffer receiver".into())};
@@ -372,7 +383,7 @@ impl InkContext {
             let V::Buffer(b)=a[0].clone() else{return Err("buffer receiver".into())};
             let index=|v:&V|->R<u32>{if let V::U32(x)=v{Ok(*x)}else{Err("buffer index".into())}};
             return Ok(match method {
-                "len"=>V::U32(b.len()),"freeze"=>V::List(b.freeze()),"pop"=>V::Buffer(b.pop()),
+                "len"=>V::U32(b.len()),"freeze"=>V::List(b.freeze_handle()),"pop"=>V::Buffer(b.pop()),
                 "contains"=>V::Bool(index(&a[1])?<b.len()),"get"=>b.get(index(&a[1])?).ok_or("buffer index outside bounds")?,
                 "set"=>V::Buffer(b.set(index(&a[1])?,a[2].clone())),"swap"=>V::Buffer(b.swap(index(&a[1])?,index(&a[2])?)),
                 "push"=>{if b.len()>=1000000{return Err("temporary allocation limit exceeded".into())};let weight=a[1].weight();if weight>64*1024*1024-self.arena_bytes{return Err("temporary allocation limit exceeded".into())};self.arena_bytes+=weight;V::Buffer(b.push(a[1].clone()))},
@@ -463,7 +474,7 @@ impl InkContext {
             });
         }
         Ok(match op {
-            "list" => V::List(vec![]),
+            "list" => V::List(a.iter_mut().map(|v| std::mem::replace(v, V::Unit)).collect()),
             "vector" => V::Vector(
                 a.iter_mut()
                     .map(|v| std::mem::replace(v, V::Unit))
@@ -518,6 +529,7 @@ impl InkContext {
                 V::U32(n) => V::U32(n.wrapping_neg()),
                 V::U64(n) => V::U64(n.wrapping_neg()),
                 V::I32(n) => V::I32(n.wrapping_neg()),
+                V::Int(n) => V::Int(-n),
                 V::F32(n) => V::F32(n ^ 0x80000000),
                 _ => return Err("numeric negation".into()),
             },
@@ -667,7 +679,7 @@ pub unsafe extern "C" fn ink_parallel(ctx:*mut InkContext,input:u64,grain:u32,ca
             let mut budget=1000000;
             let output=values.as_array().ok_or("parallel output array")?.iter().map(|v|FrozenV::from_wire(v,0,&mut budget).map(FrozenV::value)).collect::<R<Vec<_>>>()?;
             if output.len()!=items.len(){return Err("parallel result length".into());}
-            return Ok(if buffer==1{V::Buffer(OwnedBuffer::new(output))}else{V::List(output)});
+            return Ok(if buffer==1{V::Buffer(OwnedBuffer::shared(output))}else{V::List(output)});
         }
 
         let requested=std::env::var("INK_THREADS").ok().and_then(|x|x.parse::<usize>().ok()).unwrap_or_else(||std::thread::available_parallelism().map(|x|x.get()).unwrap_or(1)).clamp(1,32);
@@ -697,7 +709,7 @@ pub unsafe extern "C" fn ink_parallel(ctx:*mut InkContext,input:u64,grain:u32,ca
             Ok::<_,String>(out)
         })?};
         let output=output.into_iter().map(FrozenV::value).collect();
-        Ok(if buffer==1 {V::Buffer(OwnedBuffer::new(output))} else {V::List(output)})
+        Ok(if buffer==1 {V::Buffer(OwnedBuffer::shared(output))} else {V::List(output)})
     })();
     c.result(result)
 }
