@@ -1,0 +1,10 @@
+[package]
+name = "ink-native-support"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/siliconjungle/ink-native-support"
+[workspace]
+
+[dev-dependencies]
+num-bigint = "0.4"
+serde_json = { version = "1", features = ["float_roundtrip"] }
