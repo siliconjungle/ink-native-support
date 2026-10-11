@@ -1,0 +1,86 @@
+// Fixed finite-map storage primitive. Public traversal is always key ordered;
+// dense slots are private and may move on removal. No row pointers escape.
+#[derive(Clone, Debug)]
+pub struct InkTable<K: Ord, V> {
+    index: std::collections::BTreeMap<K, usize>,
+    rows: Vec<(K, V)>,
+}
+impl<K: Ord, V> Default for InkTable<K, V> {
+    fn default() -> Self {
+        Self {
+            index: std::collections::BTreeMap::new(),
+            rows: Vec::new(),
+        }
+    }
+}
+impl<K: Ord + Clone, V> InkTable<K, V> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn len(&self) -> usize {
+        self.rows.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.rows.is_empty()
+    }
+    pub fn contains_key(&self, key: &K) -> bool {
+        self.index.contains_key(key)
+    }
+    pub fn get(&self, key: &K) -> Option<&V> {
+        self.index.get(key).map(|&slot| &self.rows[slot].1)
+    }
+    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        let slot = *self.index.get(key)?;
+        Some(&mut self.rows[slot].1)
+    }
+    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+        if let Some(&slot) = self.index.get(&key) {
+            return Some(std::mem::replace(&mut self.rows[slot].1, value));
+        }
+        let slot = self.rows.len();
+        self.index.insert(key.clone(), slot);
+        self.rows.push((key, value));
+        None
+    }
+    pub fn remove(&mut self, key: &K) -> Option<V> {
+        let slot = self.index.remove(key)?;
+        let (_, value) = self.rows.swap_remove(slot);
+        if slot < self.rows.len() {
+            *self
+                .index
+                .get_mut(&self.rows[slot].0)
+                .expect("moved row index") = slot;
+        }
+        Some(value)
+    }
+    pub fn keys(&self) -> impl DoubleEndedIterator<Item = &K> + ExactSizeIterator {
+        self.index.keys()
+    }
+    pub fn values(&self) -> impl DoubleEndedIterator<Item = &V> + ExactSizeIterator {
+        self.index.values().map(move |&slot| &self.rows[slot].1)
+    }
+    pub fn iter(&self) -> impl DoubleEndedIterator<Item = (&K, &V)> + ExactSizeIterator {
+        self.index
+            .iter()
+            .map(move |(key, &slot)| (key, &self.rows[slot].1))
+    }
+    // The caller must establish order independence before using dense traversal
+    // to implement an ordered source computation.
+    pub fn dense_values(&self) -> impl ExactSizeIterator<Item = &V> {
+        self.rows.iter().map(|row| &row.1)
+    }
+    pub fn reserve(&mut self, additional: usize) {
+        self.rows.reserve(additional);
+    }
+}
+impl<K: Ord + Clone, V> FromIterator<(K, V)> for InkTable<K, V> {
+    fn from_iter<T: IntoIterator<Item = (K, V)>>(values: T) -> Self {
+        let mut table = Self::new();
+        let iter = values.into_iter();
+        table.reserve(iter.size_hint().0);
+        for (key, value) in iter {
+            table.insert(key, value);
+        }
+        table
+    }
+}

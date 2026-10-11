@@ -249,6 +249,7 @@ pub struct InkContext {
     arena_bytes: usize,
     meta: Json,
     tables: Vec<BTreeMap<V, V>>,
+    undo: Vec<(usize, V, Option<V>)>,
     version: u64,
     staged: Vec<(String, V)>,
     outbox: Vec<Event>,
@@ -266,6 +267,14 @@ impl Event {
     }
 }
 impl InkContext {
+    fn rollback(&mut self) {
+        for (index, key, old) in self.undo.drain(..).rev() {
+            match old {
+                Some(value) => { self.tables[index].insert(key, value); }
+                None => { self.tables[index].remove(&key); }
+            }
+        }
+    }
     fn put(&mut self, v: V) -> u64 {
         // Opaque value handles carry fixed-width scalar payloads directly.
         // Heap values remain arena indices; language and snapshot types do not change.
@@ -420,24 +429,55 @@ impl InkContext {
         if let Some(table) = op.strip_prefix("table:") {
             let (index, method) = table.split_once(':').ok_or("table operation")?;
             let index = index.parse::<usize>().map_err(|_| "table index")?;
+            if let Some(other)=method.strip_prefix("intersect_table:") {
+                let other=other.parse::<usize>().map_err(|_|"table index")?;
+                let a=self.tables.get(index).ok_or("table index")?;
+                let b=self.tables.get(other).ok_or("table index")?;
+                let (small,large)=if a.len()<=b.len(){(a,b)}else{(b,a)};
+                return Ok(V::List(small.keys().filter(|k|large.contains_key(*k)).cloned().collect()));
+            }
+            if method == "intersect_keys" {
+                let V::List(keys) = &a[0] else { return Err("bulk keys".into()); };
+                let selected: std::collections::BTreeSet<_> = keys.iter().collect();
+                return Ok(V::List(self.tables[index].keys().filter(|k| selected.contains(k)).cloned().collect()));
+            }
+            if method == "put_many" || method == "remove_many" {
+                let V::List(keys) = &a[0] else { return Err("bulk keys".into()); };
+                if method == "put_many" {
+                    let V::List(values) = &a[1] else { return Err("bulk values".into()); };
+                    if keys.len() != values.len() { return Ok(V::Result(false, Box::new(V::String("table bulk length mismatch".into())))); }
+                    
+                    for (key, value) in keys.iter().zip(values) { let old=self.tables[index].insert(key.clone(), value.clone()); self.undo.push((index, key.clone(), old)); }
+                    return Ok(V::Result(true, Box::new(V::Unit)));
+                }
+                for key in keys { if let Some(old)=self.tables[index].remove(key) { self.undo.push((index,key.clone(),Some(old))); } }
+                return Ok(V::Unit);
+            }
             let t = self.tables.get_mut(index).ok_or("table index")?;
             return Ok(match method {
                 "values" => V::List(t.values().cloned().collect()),
+                "keys" => V::List(t.keys().cloned().collect()),
                 "get" => V::Option(t.get(&a[0]).cloned().map(Box::new)),
                 "contains" => V::Bool(t.contains_key(&a[0])),
-                "remove" => V::Option(t.remove(&a[0]).map(Box::new)),
+                "remove" => {
+                    let old = t.remove(&a[0]);
+                    if old.is_some() { self.undo.push((index, a[0].clone(), old.clone())); }
+                    V::Option(old.map(Box::new))
+                },
                 "insert" => {
                     if t.contains_key(&a[0]) {
                         return Err("insert key already present".into());
                     }
-                    t.insert(a[0].clone(), a[1].clone());
+                    let old = t.insert(a[0].clone(), a[1].clone());
+                    self.undo.push((index, a[0].clone(), old));
                     V::Unit
                 }
-                "replace" => {
-                    if !t.contains_key(&a[0]) {
+                "replace" | "put" => {
+                    if method == "replace" && !t.contains_key(&a[0]) {
                         return Err("replace key absent".into());
                     }
-                    t.insert(a[0].clone(), a[1].clone());
+                    let old = t.insert(a[0].clone(), a[1].clone());
+                    self.undo.push((index, a[0].clone(), old));
                     V::Unit
                 }
                 _ => return Err("table method".into()),
@@ -657,7 +697,7 @@ pub unsafe extern "C" fn ink_parallel(ctx:*mut InkContext,input:u64,grain:u32,ca
         let run=|start:usize,xs:&[FrozenV]|->R<Vec<FrozenV>>{
             struct Guard(u32);impl Drop for Guard{fn drop(&mut self){PARALLEL_DEPTH.with(|d|d.set(self.0));}}
             let _guard=Guard(PARALLEL_DEPTH.with(|d|{let old=d.get();d.set(old+1);old}));
-            let mut local=InkContext{values:vec![],error:None,fuel:100000000,arena_bytes:0,meta:meta.clone(),tables:vec![],version:0,staged:vec![],outbox:vec![]};
+            let mut local=InkContext{values:vec![],error:None,fuel:100000000,arena_bytes:0,meta:meta.clone(),tables:vec![],undo:vec![],version:0,staged:vec![],outbox:vec![]};
             let captures=captures.iter().cloned().map(|v|local.put(v.value())).collect::<Vec<_>>();
             let mut out=Vec::with_capacity(xs.len());
             for (i,item) in xs.iter().enumerate(){
@@ -875,6 +915,7 @@ impl State {
             ctx: Box::new(InkContext {
                 meta,
                 tables: vec![BTreeMap::new(); count],
+                undo: vec![],
                 values: vec![],
                 error: None,
                 fuel: 100000000,
@@ -933,7 +974,7 @@ impl State {
             .into_iter()
             .map(|v| self.ctx.put(v))
             .collect::<Vec<_>>();
-        let tables = self.ctx.tables.clone();
+        self.ctx.undo.clear();
         let version = self.ctx.version;
         let h = unsafe {
             ink_program_call(
@@ -958,7 +999,7 @@ impl State {
         }
         match result {
             Err(e) => {
-                self.ctx.tables = tables;
+                self.ctx.rollback();
                 self.ctx.staged.clear();
                 self.ctx.values.clear();
                 Err(e)
@@ -969,7 +1010,7 @@ impl State {
                 if change {
                     let next = match transaction::decide(version, succeeded) {
                         transaction::Decision::Rollback => {
-                            self.ctx.tables = tables;
+                            self.ctx.rollback();
                             self.ctx.staged.clear();
                             self.ctx.values.clear();
                             return Ok(
@@ -977,7 +1018,7 @@ impl State {
                             );
                         }
                         transaction::Decision::Exhausted => {
-                            self.ctx.tables = tables;
+                            self.ctx.rollback();
                             self.ctx.staged.clear();
                             self.ctx.values.clear();
                             return Err("commit sequence exhausted".into());
@@ -998,10 +1039,11 @@ impl State {
                         .collect::<Vec<_>>();
                     let wire = events.iter().map(Event::to_json).collect::<Vec<_>>();
                     self.ctx.outbox.extend(events);
+                    self.ctx.undo.clear();
                     self.ctx.values.clear();
                     Ok(json!({"result":result,"committed":true,"version":next,"events":wire}))
                 } else {
-                    self.ctx.tables = tables;
+                    self.ctx.rollback();
                     self.ctx.staged.clear();
                     self.ctx.values.clear();
                     Ok(json!({"result":result,"committed":false,"version":version,"events":[]}))
