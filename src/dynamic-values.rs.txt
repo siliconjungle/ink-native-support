@@ -936,7 +936,7 @@ pub unsafe extern "C" fn ink_finish_action(ctx: *mut InkContext, h: u64) -> u64 
         None => h,
     }
 }
-struct HostTransaction { version: u64, removed: Vec<Event> }
+struct HostTransaction { version: u64, removed: Vec<Event>, undo: BTreeMap<(usize, V), Option<V>> }
 pub struct State {
     ctx: Box<InkContext>,
     host: Option<HostTransaction>,
@@ -1060,7 +1060,13 @@ impl State {
                         }
                         transaction::Decision::Commit { version } => version,
                     };
-                    if self.host.is_none() { self.ctx.undo.clear(); }
+                    if let Some(host) = &mut self.host {
+                        // Each action owns a separate before-image map. Only successful
+                        // actions contribute the first image of a cell to the host journal.
+                        for (cell, old) in std::mem::take(&mut self.ctx.undo) {
+                            host.undo.entry(cell).or_insert(old);
+                        }
+                    } else { self.ctx.undo.clear(); }
                     self.ctx.version = next;
                     let events = transaction::publish(next, self.ctx.staged.drain(..))
                         .map(|p| {
@@ -1100,12 +1106,12 @@ impl State {
     }
     pub fn begin_transaction(&mut self) -> R<bool> {
         if self.host.is_some() || !self.ctx.undo.is_empty() || !self.ctx.staged.is_empty() { return Err("transaction already in progress".into()); }
-        self.host = Some(HostTransaction { version: self.ctx.version, removed: vec![] }); Ok(true)
+        self.host = Some(HostTransaction { version: self.ctx.version, removed: vec![], undo: BTreeMap::new() }); Ok(true)
     }
     pub fn commit_transaction(&mut self) { self.host = None; self.ctx.undo.clear(); }
     pub fn rollback_transaction(&mut self) {
         if let Some(host) = self.host.take() {
-            self.ctx.rollback(); self.ctx.version = host.version;
+            self.ctx.rollback(); self.ctx.undo = host.undo; self.ctx.rollback(); self.ctx.version = host.version;
             self.ctx.outbox.retain(|e| e.commit <= host.version);
             let mut restored = host.removed; restored.append(&mut self.ctx.outbox); self.ctx.outbox = restored;
         }
