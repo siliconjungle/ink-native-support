@@ -18,4 +18,11 @@ checks exact float bits, integer boundaries, tagged values and owned collections
 Distribution conformance additionally compiles complete C/Rust applications and
 checks their actions, snapshots and Wasm exports against the reference evaluator.
 
+The dynamic C bridge borrows heap operands for list length, field/tag inspection
+and comparisons. A projected composite field still returns an owned copy;
+mutation primitives retain their ownership rules. Scalar binary32 comparisons
+use IEEE semantics, while aggregate comparisons preserve stored float bits.
+The distribution's `borrowed_native_reads` test checks actual generated bridge
+allocations, invalid handles and execution fuel in addition to target parity.
+
 `INDEXED_TABLE_RUST_SOURCE` supplies optional contiguous row slots with an ordered key-to-slot index. Keys and public views stay ordered; swap removal repairs moved slots. The C dynamic runtime uses touched-row rollback journals and retains its ordered-map storage. These primitives are trusted implementations, independently tested against std BTreeMap and distribution histories.

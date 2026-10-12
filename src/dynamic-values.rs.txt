@@ -3,6 +3,7 @@ use num_bigint::BigInt;
 use serde_json::{json, Value as Json};
 use std::collections::BTreeMap;
 use std::ffi::{c_char, CStr};
+use std::borrow::Cow;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum V {
     Unit,
@@ -63,6 +64,29 @@ impl V {
     }
 }
 type R<T> = Result<T, String>;
+// Scalar binary32 comparisons use IEEE semantics. Contained binary32 values
+// remain stored bit carriers through V's structural equality and ordering.
+fn compare_values(op: &str, left: &V, right: &V) -> V {
+    let equal = if let (V::F32(x), V::F32(y)) = (left, right) {
+        f32::from_bits(*x) == f32::from_bits(*y)
+    } else {
+        left == right
+    };
+    let order = if let (V::F32(x), V::F32(y)) = (left, right) {
+        f32::from_bits(*x).partial_cmp(&f32::from_bits(*y))
+    } else {
+        Some(left.cmp(right))
+    };
+    use std::cmp::Ordering::*;
+    V::Bool(match op {
+        "==" => equal,
+        "!=" => !equal,
+        "<" => order == Some(Less),
+        ">" => order == Some(Greater),
+        "<=" => matches!(order, Some(Less | Equal)),
+        _ => matches!(order, Some(Greater | Equal)),
+    })
+}
 fn from_json(v: &Json, t: &Json, meta: &Json, left: &mut usize, depth: usize) -> R<V> {
     if depth > 128 || *left == 0 {
         return Err("value resource limit exceeded".into());
@@ -316,6 +340,50 @@ impl InkContext {
             _ => Err("invalid value handle".into()),
         }
     }
+    // Heap handles borrow their existing value. Immediate scalar handles need
+    // only a stack value, never a heap allocation or a composite clone.
+    fn borrowed_value(&self, h: u64) -> R<Cow<'_, V>> {
+        if h >> 32 == 0 {
+            let index = usize::try_from(h.checked_sub(1).ok_or("invalid value handle")?)
+                .map_err(|_| "invalid value handle")?;
+            self.values.get(index).map(Cow::Borrowed).ok_or_else(|| "invalid value handle".into())
+        } else {
+            self.value(h).map(Cow::Owned)
+        }
+    }
+    // Only fixed read-only primitive semantics live here. Source algorithms,
+    // hoisting and other equality-law choices remain in knowledge.
+    fn borrowed_primitive(&self, op: &str, handles: &[u64]) -> R<Option<V>> {
+        if handles.len() == 1 {
+            if op == "list_length" {
+                let value = self.borrowed_value(handles[0])?;
+                let V::List(xs) = value.as_ref() else { return Err("list length".into()); };
+                return Ok(Some(V::U32(xs.len().try_into().map_err(|_| "list exceeds u32")?)));
+            }
+            if let Some(field) = op.strip_prefix("field:") {
+                let value = self.borrowed_value(handles[0])?;
+                let selected: R<V> = match value.as_ref() {
+                    V::Record(_, fields) => fields.get(field).cloned().ok_or_else(|| "unknown field".into()),
+                    V::Vector(xs) => ["x", "y", "z", "w"].iter().position(|f| *f == field)
+                        .and_then(|i| xs.get(i)).cloned().ok_or_else(|| "unknown component".into()),
+                    _ => Err("field requires record/vector".into()),
+                };
+                return Ok(Some(selected?));
+            }
+            if let Some(tag) = op.strip_prefix("tag:") {
+                let value = self.borrowed_value(handles[0])?;
+                return Ok(Some(V::Bool(matches!((value.as_ref(), tag),
+                    (V::Option(Some(_)), "Some") | (V::Result(true, _), "Ok")
+                    | (V::Result(false, _), "Err")))));
+            }
+        }
+        if handles.len() == 2 && matches!(op, "==" | "!=" | "<" | ">" | "<=" | ">=") {
+            let left = self.borrowed_value(handles[0])?;
+            let right = self.borrowed_value(handles[1])?;
+            return Ok(Some(compare_values(op, left.as_ref(), right.as_ref())));
+        }
+        Ok(None)
+    }
     fn fail(&mut self, e: String) -> u64 {
         if self.error.is_none() {
             self.error = Some(Failure::Host(e))
@@ -561,25 +629,7 @@ impl InkContext {
                 _ => return Err("numeric negation".into()),
             },
             "==" | "!=" | "<" | ">" | "<=" | ">=" => {
-                let equal = if let (V::F32(x), V::F32(y)) = (&a[0], &a[1]) {
-                    f32::from_bits(*x) == f32::from_bits(*y)
-                } else {
-                    a[0] == a[1]
-                };
-                let order = if let (V::F32(x), V::F32(y)) = (&a[0], &a[1]) {
-                    f32::from_bits(*x).partial_cmp(&f32::from_bits(*y))
-                } else {
-                    Some(a[0].cmp(&a[1]))
-                };
-                use std::cmp::Ordering::*;
-                V::Bool(match op {
-                    "==" => equal,
-                    "!=" => !equal,
-                    "<" => order == Some(Less),
-                    ">" => order == Some(Greater),
-                    "<=" => matches!(order, Some(Less | Equal)),
-                    _ => matches!(order, Some(Greater | Equal)),
-                })
+                compare_values(op, &a[0], &a[1])
             }
             "checked_add" | "checked_sub" | "checked_mul" => {
                 let value = match (&a[0], &a[1]) {
@@ -807,6 +857,9 @@ pub unsafe extern "C" fn ink_op(
         } else {
             std::slice::from_raw_parts(args, n)
         };
+        if let Some(value) = c.borrowed_primitive(op, hs)? {
+            return Ok(value);
+        }
         // Most primitives have at most four operands; keep their scratch values
         // on the stack rather than allocating a fresh Vec for every operation.
         if hs.len() <= 4 {
