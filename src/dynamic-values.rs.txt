@@ -1044,7 +1044,9 @@ impl State {
             .enumerate()
             .find(|(_, d)| d["name"] == name)
             .ok_or_else(|| format!("unknown {section} {name}"))?;
+        let guard = d["precondition"].as_str().map(str::to_owned);
         let change = d["change"].as_bool().unwrap_or(false);
+        let fallible = d["result"].get("Result").is_some();
         if kind==0 && d["internal"].as_bool()==Some(true) {return Err("temporary storage is internal to a pure invocation".into());}
         let args = args.as_array().ok_or("expected argument array")?;
         let params = d["params"].as_array().ok_or("compiled parameters")?;
@@ -1057,6 +1059,11 @@ impl State {
             .zip(params)
             .map(|(v, t)| from_json(v, t, &self.ctx.meta, &mut left, 0))
             .collect::<R<Vec<_>>>()?;
+        if let Some(guard)=guard {
+            let predicate=self.call(&guard,&Json::Array(args.clone()),kind)?;
+            let valid=if kind==0{predicate.as_bool()}else{predicate["result"].as_bool()};
+            if valid!=Some(true){return Err("contract precondition failed".into());}
+        }
         self.ctx.values.clear();
         self.ctx.arena_bytes = 0;
         self.ctx.error = None;
@@ -1096,7 +1103,7 @@ impl State {
                 Err(e)
             }
             Ok(result) => {
-                let succeeded = result.get("Ok").is_some();
+                let succeeded = !fallible || result.get("Ok").is_some();
                 if change {
                     let next = match transaction::decide(version, succeeded) {
                         transaction::Decision::Rollback => {
@@ -1272,6 +1279,13 @@ impl State {
                 channel,
                 value,
             });
+        }
+        let guards = s.ctx.meta["invariant_checks"].as_array().cloned().unwrap_or_default();
+        for guard in guards {
+            let name = guard.as_str().ok_or("invalid invariant metadata")?;
+            if s.invoke_json(name, &json!([]))?["result"] != Json::Bool(true) {
+                return Err("snapshot violates state invariant".into());
+            }
         }
         Ok(s)
     }
