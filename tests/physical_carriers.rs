@@ -99,3 +99,12 @@ fn packed_bits_preserve_boundary_bits_and_clear_truncated_padding() {
     assert_eq!(bits.len(), 0);
     assert_eq!(bits.payload_bytes(), 0);
 }
+
+#[test]
+fn capacity_failures_leave_packed_columns_readable() {
+    let mut words=PackedWords::<8,32>::default();words.push(7);
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(||words.reserve(usize::MAX))).is_err());assert_eq!(words.get(0),7);
+    let mut bits=PackedBits::default();bits.push(true);
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(||bits.reserve(usize::MAX))).is_err());assert!(bits.get(0));
+    let mut other=PackedWords::<8,32>::default();other.push(65536);words.prepare_append(&other);assert_eq!(words.get(0),7);words.push(other.get(0));assert_eq!(words.get(1),65536);
+}

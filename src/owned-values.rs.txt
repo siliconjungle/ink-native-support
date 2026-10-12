@@ -360,6 +360,9 @@ pub struct PackedWords<const BITS:u8,const BASE:u8=64>{data:InkWordLanes}
 impl<const BITS:u8,const BASE:u8> Default for PackedWords<BITS,BASE>{fn default()->Self{Self{data:match BITS{8=>InkWordLanes::U8(vec![]),16=>InkWordLanes::U16(vec![]),32=>InkWordLanes::U32(vec![]),64=>InkWordLanes::U64(vec![]),_=>panic!("invalid packed word width")}}}}
 impl<const BITS:u8,const BASE:u8> PackedWords<BITS,BASE>{
  pub fn with_capacity(n:usize)->Self{Self{data:match BITS{8=>InkWordLanes::U8(Vec::with_capacity(n)),16=>InkWordLanes::U16(Vec::with_capacity(n)),32=>InkWordLanes::U32(Vec::with_capacity(n)),64=>InkWordLanes::U64(Vec::with_capacity(n)),_=>panic!("invalid packed word width")}}}
+ pub fn prepare_push(&mut self,x:u64){if !self.fits(x){self.promote(x);}self.reserve(1);}
+ pub fn reserve(&mut self,n:usize){match &mut self.data{InkWordLanes::U8(v)=>v.reserve(n),InkWordLanes::U16(v)=>v.reserve(n),InkWordLanes::U32(v)=>v.reserve(n),InkWordLanes::U64(v)=>v.reserve(n)}}
+ pub fn prepare_append(&mut self,other:&Self){if other.len()==0{return;}let bound=match other.data{InkWordLanes::U8(_)=>u8::MAX as u64,InkWordLanes::U16(_)=>u16::MAX as u64,InkWordLanes::U32(_)=>u32::MAX as u64,InkWordLanes::U64(_)=>u64::MAX};if !self.fits(bound){self.promote(bound);}self.reserve(other.len());}
  pub fn len(&self)->usize{match &self.data{InkWordLanes::U8(v)=>v.len(),InkWordLanes::U16(v)=>v.len(),InkWordLanes::U32(v)=>v.len(),InkWordLanes::U64(v)=>v.len()}}
  pub fn storage_identity(&self)->usize{match &self.data{InkWordLanes::U8(v)=>v.as_ptr()as usize,InkWordLanes::U16(v)=>v.as_ptr()as usize,InkWordLanes::U32(v)=>v.as_ptr()as usize,InkWordLanes::U64(v)=>v.as_ptr()as usize}}
  pub fn payload_bytes(&self)->usize{self.len()*match self.data{InkWordLanes::U8(_)=>1,InkWordLanes::U16(_)=>2,InkWordLanes::U32(_)=>4,InkWordLanes::U64(_)=>8}}
@@ -375,6 +378,9 @@ impl<const BITS:u8,const BASE:u8> PackedWords<BITS,BASE>{
 pub struct PackedBits{len:usize,words:Vec<u64>}
 impl PackedBits{
  pub fn with_capacity(n:usize)->Self{Self{len:0,words:Vec::with_capacity(n.div_ceil(64))}}
+ pub fn reserve(&mut self,n:usize){let total=self.len.checked_add(n).expect("bit length overflow").div_ceil(64);self.words.reserve(total-self.words.len());}
+ pub fn prepare_push(&mut self,_:bool){self.reserve(1);}
+ pub fn prepare_append(&mut self,other:&Self){self.reserve(other.len());}
  pub fn len(&self)->usize{self.len}
  pub fn payload_bytes(&self)->usize{self.words.len()*8}
  pub fn storage_identity(&self)->usize{self.words.as_ptr()as usize}
