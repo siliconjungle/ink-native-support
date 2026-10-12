@@ -26,3 +26,8 @@ The distribution's `borrowed_native_reads` test checks actual generated bridge
 allocations, invalid handles and execution fuel in addition to target parity.
 
 `INDEXED_TABLE_RUST_SOURCE` supplies optional contiguous row slots with an ordered key-to-slot index. Keys and public views stay ordered; swap removal repairs moved slots. The C dynamic runtime uses touched-row rollback journals and retains its ordered-map storage. These primitives are trusted implementations, independently tested against std BTreeMap and distribution histories.
+
+## License
+
+Project code and documentation are [MIT licensed](LICENSE). Third-party dependencies,
+vendored projects and research data retain their own licenses and notices.
