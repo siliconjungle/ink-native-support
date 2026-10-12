@@ -24,8 +24,21 @@ impl<T:Clone> OwnedBuffer<T> {
     }}
     pub fn len(&self)->u32 {let n=match &self.0 {InkBufferStorage::Owned(xs)=>xs.len(),InkBufferStorage::Shared{start,end,..}=>end-start};n.try_into().expect("buffer exceeds u32")}
     pub fn get(&self,i:u32)->Option<T>{self.read(|xs|xs.get(i as usize).cloned())}
+    pub fn with_item<R>(&self,i:u32,f:impl FnOnce(Option<&T>)->R)->R {self.read(|xs|f(xs.get(i as usize)))}
     pub fn set(mut self,i:u32,value:T)->Self {self.edit(|xs|if let Some(x)=xs.get_mut(i as usize){*x=value});self}
     pub fn swap(mut self,a:u32,b:u32)->Self {self.edit(|xs|if (a as usize)<xs.len()&&(b as usize)<xs.len(){xs.swap(a as usize,b as usize)});self}
+    pub fn fill_range(mut self,start:u32,count:u32,value:T)->Self {
+        self.edit(|xs|{let start=(start as usize).min(xs.len());let count=(count as usize).min(xs.len()-start);xs[start..start+count].fill(value)});self
+    }
+    pub fn copy_within(mut self,source:u32,destination:u32,count:u32)->Self {
+        self.edit(|xs|{
+            let source=(source as usize).min(xs.len());let destination=(destination as usize).min(xs.len());
+            let count=(count as usize).min(xs.len()-source).min(xs.len()-destination);
+            if source==destination{return}
+            if destination>source {for i in (0..count).rev(){xs[destination+i]=xs[source+i].clone();}}
+            else {for i in 0..count{xs[destination+i]=xs[source+i].clone();}}
+        });self
+    }
     pub fn map_inplace(mut self,mut f:impl FnMut(T)->T)->Self {self.edit(|xs|for x in xs{*x=f(x.clone())});self}
     pub fn map_indexed_inplace(mut self,mut f:impl FnMut(u32,T)->T)->Self {self.edit(|xs|for(i,x)in xs.iter_mut().enumerate(){*x=f(i as u32,x.clone())});self}
     pub fn scan_inplace(mut self,acc:T,mut f:impl FnMut(T,T)->T)->Self {let mut state=Some(acc);self.edit(|xs|for x in xs{let next=f(state.take().expect("scan state"),x.clone());*x=next.clone();state=Some(next)});self}
