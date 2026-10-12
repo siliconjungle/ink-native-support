@@ -86,3 +86,16 @@ fn affine_handle_release_transfers_full_storage_and_preserves_empty_views(){
  assert_eq!(a.freeze_handle(),vec![1,2,3]);assert_eq!(b.get(0),None);
  assert_eq!(b.set(0,99).push(7).freeze(),vec![7]);
 }
+
+#[test]
+fn bulk_ranges_preserve_allocation_overlap_and_scoped_boundaries(){
+ let xs=vec![0u32,1,2,3,4,5,6];let pointer=xs.as_ptr();
+ let(a,b)=OwnedBuffer::new(xs).split(3);
+ let result=a.fill_range(1,u32::MAX,9).append(b.copy_within(0,1,u32::MAX)).freeze();
+ assert_eq!(result,vec![0,9,9,3,3,4,5]);assert_eq!(result.as_ptr(),pointer);
+ let xs=vec![0u32,1,2,3,4];let pointer=xs.as_ptr();
+ let result=OwnedBuffer::new(xs).copy_within(0,1,4).copy_within(1,0,4).freeze();
+ assert_eq!(result,vec![0,1,2,3,3]);assert_eq!(result.as_ptr(),pointer);
+ assert_eq!(OwnedBuffer::new(vec!["a".to_owned(),"b".into(),"c".into()]).copy_within(0,1,2).freeze(),vec!["a","a","b"]);
+ assert_eq!(OwnedBuffer::new(vec![u64::MAX,0]).fill_range(u32::MAX,u32::MAX,1).freeze(),vec![u64::MAX,0]);
+}
