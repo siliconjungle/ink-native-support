@@ -25,6 +25,7 @@ impl<T:Clone> OwnedBuffer<T> {
     pub fn len(&self)->u32 {let n=match &self.0 {InkBufferStorage::Owned(xs)=>xs.len(),InkBufferStorage::Shared{start,end,..}=>end-start};n.try_into().expect("buffer exceeds u32")}
     pub fn get(&self,i:u32)->Option<T>{self.read(|xs|xs.get(i as usize).cloned())}
     pub fn with_item<R>(&self,i:u32,f:impl FnOnce(Option<&T>)->R)->R {self.read(|xs|f(xs.get(i as usize)))}
+    pub unsafe fn get_unchecked(&self,i:u32)->T {self.read(|xs|unsafe{xs.get_unchecked(i as usize).clone()})}
     pub fn set(mut self,i:u32,value:T)->Self {self.edit(|xs|if let Some(x)=xs.get_mut(i as usize){*x=value});self}
     pub fn swap(mut self,a:u32,b:u32)->Self {self.edit(|xs|if (a as usize)<xs.len()&&(b as usize)<xs.len(){xs.swap(a as usize,b as usize)});self}
     pub fn fill_range(mut self,start:u32,count:u32,value:T)->Self {
@@ -317,3 +318,69 @@ pub fn ink_parallel_statistics()->(u64,Vec<String>,Vec<String>){let r=INK_PARALL
 
 #[inline(never)]
 pub fn ink_f32(value:f32)->f32{if value.is_nan(){f32::from_bits(0x7fc00000)}else{value}}
+
+// An explicit private-vector representation of the same affine Buffer value.
+// Splitting copies into independent owners; allocation identity is unobservable.
+// Selected by a checked physical plan, never by a workload matcher.
+#[derive(Clone,Debug,PartialEq,Eq,PartialOrd,Ord)]
+pub struct DirectBuffer<T>(Vec<T>);
+impl<T:Clone> DirectBuffer<T> {
+    pub fn new(xs:Vec<T>)->Self {Self(xs)}
+    pub fn shared(xs:Vec<T>)->Self {Self(xs)}
+    pub fn len(&self)->u32 {self.0.len().try_into().expect("buffer exceeds u32")}
+    pub fn get(&self,i:u32)->Option<T>{self.0.get(i as usize).cloned()}
+    pub fn with_item<R>(&self,i:u32,f:impl FnOnce(Option<&T>)->R)->R{f(self.0.get(i as usize))}
+    pub unsafe fn get_unchecked(&self,i:u32)->T{self.0.get_unchecked(i as usize).clone()}
+    pub fn set(mut self,i:u32,v:T)->Self{if let Some(x)=self.0.get_mut(i as usize){*x=v;}self}
+    pub fn swap(mut self,a:u32,b:u32)->Self{if(a as usize)<self.0.len()&&(b as usize)<self.0.len(){self.0.swap(a as usize,b as usize);}self}
+    pub fn fill_range(mut self,start:u32,count:u32,v:T)->Self{let a=(start as usize).min(self.0.len());let n=(count as usize).min(self.0.len()-a);self.0[a..a+n].fill(v);self}
+    pub fn copy_within(mut self,source:u32,destination:u32,count:u32)->Self{
+        let a=(source as usize).min(self.0.len());let b=(destination as usize).min(self.0.len());let n=(count as usize).min(self.0.len()-a).min(self.0.len()-b);
+        if b>a {for i in (0..n).rev(){self.0[b+i]=self.0[a+i].clone();}}else if a!=b {for i in 0..n{self.0[b+i]=self.0[a+i].clone();}}self
+    }
+    pub fn map_inplace(mut self,mut f:impl FnMut(T)->T)->Self{for v in &mut self.0{*v=f(v.clone());}self}
+    pub fn map_indexed_inplace(mut self,mut f:impl FnMut(u32,T)->T)->Self{for(i,v)in self.0.iter_mut().enumerate(){*v=f(i as u32,v.clone());}self}
+    pub fn scan_inplace(mut self,initial:T,mut f:impl FnMut(T,T)->T)->Self{let mut acc=initial;for v in &mut self.0{acc=f(acc,v.clone());*v=acc.clone();}self}
+    pub fn filter_inplace(mut self,mut f:impl FnMut(T)->bool)->Self{self.0.retain(|v|f(v.clone()));self}
+    pub fn truncate(mut self,n:u32)->Self{self.0.truncate(n as usize);self}
+    pub fn pop(mut self)->Self{self.0.pop();self}
+    pub fn push(mut self,v:T)->Self{assert!(self.0.len()<u32::MAX as usize,"buffer length exhausted");self.0.push(v);self}
+    pub fn split(mut self,at:u32)->(Self,Self){let right=self.0.split_off((at as usize).min(self.0.len()));(self,Self(right))}
+    pub fn append(mut self,mut other:Self)->Self{self.0.append(&mut other.0);self}
+    pub fn freeze(self)->Vec<T>{self.0}
+    pub fn freeze_handle(self)->Vec<T>{self.0}
+}
+
+// Lossless scalar columns. Values outside the preferred lane promote storage;
+// promotion checks value validity, never runtime profitability.
+#[derive(Clone,Debug)]
+enum InkWordLanes { U8(Vec<u8>), U16(Vec<u16>), U32(Vec<u32>), U64(Vec<u64>) }
+#[derive(Clone,Debug)]
+pub struct PackedWords<const BITS:u8,const BASE:u8=64>{data:InkWordLanes}
+impl<const BITS:u8,const BASE:u8> Default for PackedWords<BITS,BASE>{fn default()->Self{Self{data:match BITS{8=>InkWordLanes::U8(vec![]),16=>InkWordLanes::U16(vec![]),32=>InkWordLanes::U32(vec![]),64=>InkWordLanes::U64(vec![]),_=>panic!("invalid packed word width")}}}}
+impl<const BITS:u8,const BASE:u8> PackedWords<BITS,BASE>{
+ pub fn with_capacity(n:usize)->Self{Self{data:match BITS{8=>InkWordLanes::U8(Vec::with_capacity(n)),16=>InkWordLanes::U16(Vec::with_capacity(n)),32=>InkWordLanes::U32(Vec::with_capacity(n)),64=>InkWordLanes::U64(Vec::with_capacity(n)),_=>panic!("invalid packed word width")}}}
+ pub fn len(&self)->usize{match &self.data{InkWordLanes::U8(v)=>v.len(),InkWordLanes::U16(v)=>v.len(),InkWordLanes::U32(v)=>v.len(),InkWordLanes::U64(v)=>v.len()}}
+ pub fn storage_identity(&self)->usize{match &self.data{InkWordLanes::U8(v)=>v.as_ptr()as usize,InkWordLanes::U16(v)=>v.as_ptr()as usize,InkWordLanes::U32(v)=>v.as_ptr()as usize,InkWordLanes::U64(v)=>v.as_ptr()as usize}}
+ pub fn payload_bytes(&self)->usize{self.len()*match self.data{InkWordLanes::U8(_)=>1,InkWordLanes::U16(_)=>2,InkWordLanes::U32(_)=>4,InkWordLanes::U64(_)=>8}}
+ pub fn get(&self,i:usize)->u64{assert!(i<self.len());unsafe{self.get_unchecked(i)}}
+ pub unsafe fn get_unchecked(&self,i:usize)->u64{match &self.data{InkWordLanes::U8(v)=>*v.get_unchecked(i)as u64,InkWordLanes::U16(v)=>*v.get_unchecked(i)as u64,InkWordLanes::U32(v)=>*v.get_unchecked(i)as u64,InkWordLanes::U64(v)=>*v.get_unchecked(i)}}
+ fn fits(&self,x:u64)->bool{match self.data{InkWordLanes::U8(_)=>x<=u8::MAX as u64,InkWordLanes::U16(_)=>x<=u16::MAX as u64,InkWordLanes::U32(_)=>x<=u32::MAX as u64,InkWordLanes::U64(_)=>true}}
+ fn promote(&mut self,value:u64){let xs=(0..self.len()).map(|i|self.get(i)).collect::<Vec<_>>();self.data=if BASE<=32&&value<=u32::MAX as u64{InkWordLanes::U32(xs.into_iter().map(|v|v as u32).collect())}else{InkWordLanes::U64(xs)};}
+ pub fn push(&mut self,x:u64){if !self.fits(x){self.promote(x);}match &mut self.data{InkWordLanes::U8(v)=>v.push(x as u8),InkWordLanes::U16(v)=>v.push(x as u16),InkWordLanes::U32(v)=>v.push(x as u32),InkWordLanes::U64(v)=>v.push(x)}}
+ pub fn set(&mut self,i:usize,x:u64){assert!(i<self.len());if !self.fits(x){self.promote(x);}match &mut self.data{InkWordLanes::U8(v)=>v[i]=x as u8,InkWordLanes::U16(v)=>v[i]=x as u16,InkWordLanes::U32(v)=>v[i]=x as u32,InkWordLanes::U64(v)=>v[i]=x}}
+ pub fn truncate(&mut self,n:usize){match &mut self.data{InkWordLanes::U8(v)=>v.truncate(n),InkWordLanes::U16(v)=>v.truncate(n),InkWordLanes::U32(v)=>v.truncate(n),InkWordLanes::U64(v)=>v.truncate(n)}}
+}
+#[derive(Clone,Debug,Default)]
+pub struct PackedBits{len:usize,words:Vec<u64>}
+impl PackedBits{
+ pub fn with_capacity(n:usize)->Self{Self{len:0,words:Vec::with_capacity(n.div_ceil(64))}}
+ pub fn len(&self)->usize{self.len}
+ pub fn payload_bytes(&self)->usize{self.words.len()*8}
+ pub fn storage_identity(&self)->usize{self.words.as_ptr()as usize}
+ pub fn get(&self,i:usize)->bool{assert!(i<self.len);unsafe{self.get_unchecked(i)}}
+ pub unsafe fn get_unchecked(&self,i:usize)->bool{(*self.words.get_unchecked(i/64)&(1u64<<(i%64)))!=0}
+ pub fn push(&mut self,x:bool){if self.len%64==0{self.words.push(0);}let i=self.len;self.len+=1;self.set(i,x);}
+ pub fn set(&mut self,i:usize,x:bool){assert!(i<self.len);let mask=1u64<<(i%64);let w=&mut self.words[i/64];*w=(*w&!mask)|if x{mask}else{0};}
+ pub fn truncate(&mut self,n:usize){self.len=self.len.min(n);self.words.truncate(self.len.div_ceil(64));if self.len%64!=0{if let Some(last)=self.words.last_mut(){*last&=(1u64<<(self.len%64))-1;}}}
+}
