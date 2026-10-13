@@ -16,9 +16,7 @@ impl State {
  pub fn validate_binary_arguments<'a>(name:&str,bytes:&'a[u8],limits:ValueWireLimits)->Result<value_wire::Validated<'a>,String>{Self::binary_schemas(name)?.0.validate(bytes,limits)}
  pub fn call_binary(&mut self,name:&str,bytes:&[u8],limits:ValueWireLimits)->Result<Vec<u8>,String>{
   let (input,output)=Self::binary_schemas(name)?;
-  let record=input.decode(bytes,limits)?;
-  let arguments=input.root()["fields"].as_array().expect("argument record").iter().map(|f|record[f["name"].as_str().unwrap()].clone()).collect::<Vec<_>>();
-  let result=self.binary_call_value(name,&Json::Array(arguments))?;
-  output.encode(&result,limits)
+  let record=input.validate(bytes,limits)?;
+  self.binary_call_frame(name,record,output,limits)
  }
 }
