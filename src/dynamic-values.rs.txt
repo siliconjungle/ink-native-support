@@ -354,6 +354,20 @@ impl InkContext {
     // Only fixed read-only primitive semantics live here. Source algorithms,
     // hoisting and other equality-law choices remain in knowledge.
     fn borrowed_primitive(&self, op: &str, handles: &[u64]) -> R<Option<V>> {
+        if ["string_byte_len","string_byte_at","string_slice","string_concat","string_find"].contains(&op) {
+            let expected=match op {"string_byte_len"=>1,"string_byte_at"|"string_concat"=>2,_=>3};
+            if handles.len()!=expected{return Err("string primitive arity".into());}
+            let text=self.borrowed_value(handles[0])?;let V::String(text)=text.as_ref()else{return Err("expected String".into());};
+            let u=|i|if let V::U32(x)=self.value(handles[i])?{Ok(x)}else{Err("expected U32".into())};
+            let option=|x:Option<V>|V::Option(x.map(Box::new));
+            return Ok(Some(match op {
+                "string_byte_len"=>V::U32(temporary::ink_string_byte_len(text)),
+                "string_byte_at"=>option(temporary::ink_string_byte_at(text,u(1)?).map(V::U32)),
+                "string_slice"=>option(temporary::ink_string_slice(text,u(1)?,u(2)?).map(V::String)),
+                _=>{let other=self.borrowed_value(handles[1])?;let V::String(other)=other.as_ref()else{return Err("expected String".into());};
+                    if op=="string_concat"{V::String(temporary::ink_string_concat(text,other))}else{option(temporary::ink_string_find(text,other,u(2)?).map(V::U32))}}
+            }));
+        }
         if handles.len() == 1 {
             if op == "list_length" {
                 let value = self.borrowed_value(handles[0])?;
