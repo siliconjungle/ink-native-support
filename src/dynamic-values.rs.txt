@@ -354,6 +354,20 @@ impl InkContext {
     // Only fixed read-only primitive semantics live here. Source algorithms,
     // hoisting and other equality-law choices remain in knowledge.
     fn borrowed_primitive(&self, op: &str, handles: &[u64]) -> R<Option<V>> {
+        if ["string_byte_len","string_byte_at","string_slice","string_concat","string_find"].contains(&op) {
+            let expected=match op {"string_byte_len"=>1,"string_byte_at"|"string_concat"=>2,_=>3};
+            if handles.len()!=expected{return Err("string primitive arity".into());}
+            let text=self.borrowed_value(handles[0])?;let V::String(text)=text.as_ref()else{return Err("expected String".into());};
+            let u=|i:usize| -> R<u32> {if let V::U32(x)=self.value(handles[i])?{Ok(x)}else{Err("expected U32".into())}};
+            let option=|x:Option<V>|V::Option(x.map(Box::new));
+            return Ok(Some(match op {
+                "string_byte_len"=>V::U32(temporary::ink_string_byte_len(text)),
+                "string_byte_at"=>option(temporary::ink_string_byte_at(text,u(1)?).map(V::U32)),
+                "string_slice"=>option(temporary::ink_string_slice(text,u(1)?,u(2)?).map(V::String)),
+                _=>{let other=self.borrowed_value(handles[1])?;let V::String(other)=other.as_ref()else{return Err("expected String".into());};
+                    if op=="string_concat"{V::String(temporary::ink_string_concat(text,other))}else{option(temporary::ink_string_find(text,other,u(2)?).map(V::U32))}}
+            }));
+        }
         if handles.len() == 1 {
             if op == "list_length" {
                 let value = self.borrowed_value(handles[0])?;
@@ -409,6 +423,38 @@ impl InkContext {
         }
     }
     fn primitive(&mut self, op: &str, a: &mut [V]) -> R<V> {
+        if op=="f32_from_int" {let V::Int(x)=&a[0]else{return Err("expected Int".into())};return Ok(V::F32(ink_f32_from_int(x).to_bits()));}
+        if op=="int_from_f32" {let V::F32(x)=a[0]else{return Err("expected F32".into())};return Ok(V::Option(ink_int_from_f32(f32::from_bits(x)).map(|x|Box::new(V::Int(x)))));}
+        if ["sqrt","f32_div","floor","ceil","trunc","round_ties_even","is_nan","is_finite","f32_bits","u32_from_f32","u64_from_f32","i32_from_f32"].contains(&op) {
+            let V::F32(bits)=a[0] else{return Err("expected F32".into())};let x=f32::from_bits(bits);
+            return Ok(match op {
+                "is_nan"=>V::Bool(x.is_nan()),"is_finite"=>V::Bool(x.is_finite()),"f32_bits"=>V::U32(bits),
+                "u32_from_f32"=>V::Option(temporary::ink_u32_from_f32(x).map(|x|Box::new(V::U32(x)))),
+                "u64_from_f32"=>V::Option(temporary::ink_u64_from_f32(x).map(|x|Box::new(V::U64(x)))),
+                "i32_from_f32"=>V::Option(temporary::ink_i32_from_f32(x).map(|x|Box::new(V::I32(x)))),
+                _=>{let r=match op {
+                    "sqrt"=>temporary::ink_sqrt(x),"floor"=>temporary::ink_floor(x),"ceil"=>temporary::ink_ceil(x),"trunc"=>temporary::ink_trunc(x),"round_ties_even"=>temporary::ink_round_ties_even(x),
+                    "f32_div"=>{let V::F32(y)=a[1]else{return Err("expected F32 divisor".into())};temporary::ink_f32_div(x,f32::from_bits(y))},_=>unreachable!()};V::F32(r.to_bits())}
+            });
+        }
+        if ["f32_from_u32","f32_from_u64","f32_from_i32","f32_from_bits"].contains(&op){return Ok(V::F32(match (&a[0],op){(V::U32(x),"f32_from_bits")=>*x,(V::U32(x),_)=> (*x as f32).to_bits(),(V::U64(x),_)=> (*x as f32).to_bits(),(V::I32(x),_)=> (*x as f32).to_bits(),_=>return Err("float conversion type".into())}));}
+        if ["popcount","leading_zeros","trailing_zeros"].contains(&op){
+            macro_rules! count {($x:expr)=>{match op{"popcount"=>$x.count_ones(),"leading_zeros"=>$x.leading_zeros(),_=>$x.trailing_zeros()}}}
+            return Ok(V::U32(match &a[0]{V::U32(x)=>count!(*x),V::U64(x)=>count!(*x),V::I32(x)=>count!(*x),_=>return Err("expected word".into())}));
+        }
+        if op.starts_with("string_"){
+            let V::String(x)=&a[0]else{return Err("expected String".into())};
+            let u=|i|if let V::U32(x)=a[i]{Ok(x)}else{Err("expected U32")};
+            let option=|x:Option<V>|V::Option(x.map(Box::new));
+            return Ok(match op{
+                "string_byte_len"=>V::U32(temporary::ink_string_byte_len(x)),
+                "string_byte_at"=>option(temporary::ink_string_byte_at(x,u(1)?).map(V::U32)),
+                "string_slice"=>option(temporary::ink_string_slice(x,u(1)?,u(2)?).map(V::String)),
+                "string_concat"=>{let V::String(y)=&a[1]else{return Err("expected String".into())};V::String(temporary::ink_string_concat(x,y))},
+                "string_find"=>{let V::String(y)=&a[1]else{return Err("expected String".into())};option(temporary::ink_string_find(x,y,u(2)?).map(V::U32))},
+                _=>return Err("unknown string primitive".into())
+            });
+        }
         if ["word_not","word_and","word_or","word_xor","wrapping_shl","wrapping_shr","rotate_left","rotate_right"].contains(&op) {
             macro_rules! apply {($x:expr,$variant:ident)=>{{
                 let x=*$x;

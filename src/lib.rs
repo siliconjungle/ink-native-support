@@ -11,3 +11,9 @@ pub const CONTINUATION_FRAMES_RUST_SOURCE: &str = include_str!("continuation-fra
 pub const BINARY_VALUES_RUST_SOURCE: &str = include_str!("binary-values.rs.txt");
 
 pub const BINARY_EXPORTS_RUST_SOURCE: &str = include_str!("binary-exports.rs.txt");
+pub const DIRECT_VALUES_RUST_SOURCE: &str = include_str!("direct-values.rs.txt");
+
+pub const DYNAMIC_BINARY_RUST_SOURCE: &str = include_str!("dynamic-binary.rs.txt");
+
+/// Generated fixed integer/float conversions; needs the host BigInt dependency.
+pub const NUMERIC_INT_RUST_SOURCE:&str=include_str!("numeric-int.rs.txt");

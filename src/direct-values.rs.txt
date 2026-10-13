@@ -1,0 +1,52 @@
+// Generic direct native values: no serde_json document/carrier on this path.
+pub trait BinaryValue: Sized {
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>;
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>;
+}
+macro_rules! binary_word {
+ ($t:ty,$kind:literal) => {impl BinaryValue for $t{
+  fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind($kind)?;Ok(Self::from_le_bytes(v.body()?.try_into().map_err(|_|"wire scalar width")?))}
+  fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(&self.to_le_bytes()))}
+ }};
+}
+binary_word!(u32,"u32");binary_word!(u64,"u64");binary_word!(i32,"i32");binary_word!(f32,"f32");
+impl BinaryValue for (){
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("unit")?;Ok(())}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|_|Ok(()))}
+}
+impl BinaryValue for bool{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("bool")?;Ok(v.body()?[0]!=0)}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(&[u8::from(*self)]))}
+}
+impl BinaryValue for String{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("string")?;Ok(v.text()?.to_owned())}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(self.as_bytes()))}
+}
+impl BinaryValue for BigInt{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("int")?;v.text()?.parse().map_err(|_|"invalid binary Int".into())}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(self.to_string().as_bytes()))}
+}
+impl<T:BinaryValue> BinaryValue for Vec<T>{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("list")?;v.items()?.map(|x|T::from_binary(x?)).collect()}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|{w.word(self.len().try_into().map_err(|_|"wire sequence size")?)?;for x in self{x.write_binary(w)?;}Ok(())})}
+}
+impl<T:BinaryValue,const N:usize> BinaryValue for [T;N]{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("vector")?;v.items()?.map(|x|T::from_binary(x?)).collect::<Result<Vec<_>,_>>()?.try_into().map_err(|_|"wire vector size".into())}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|{w.word(N.try_into().map_err(|_|"wire vector size")?)?;for x in self{x.write_binary(w)?;}Ok(())})}
+}
+impl<T:BinaryValue> BinaryValue for Box<T>{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{T::from_binary(v).map(Box::new)}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{(**self).write_binary(w)}
+}
+impl<T:BinaryValue> BinaryValue for Option<T>{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("option")?;let (_,child)=v.variant()?;child.map(T::from_binary).transpose()}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|match self{None=>w.bytes(&[0]),Some(x)=>{w.bytes(&[1])?;x.write_binary(w)}})}
+}
+impl<T:BinaryValue,E:BinaryValue> BinaryValue for Result<T,E>{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("result")?;let (err,child)=v.variant()?;let child=child.ok_or("wire Result payload")?;if err{E::from_binary(child).map(Err)}else{T::from_binary(child).map(Ok)}}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|match self{Ok(x)=>{w.bytes(&[0])?;x.write_binary(w)},Err(x)=>{w.bytes(&[1])?;x.write_binary(w)}})}
+}
+impl BinaryValue for InkArithmeticError{
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("enum")?;v.require_name("ArithmeticError")?;if v.text()?=="ArithmeticError.Overflow"{Ok(Self::Overflow)}else{Err("wire arithmetic error".into())}}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(b"ArithmeticError.Overflow"))}
+}
