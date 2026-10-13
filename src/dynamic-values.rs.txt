@@ -451,6 +451,7 @@ impl InkContext {
             let index=|v:&V|->R<u32>{if let V::U32(x)=v{Ok(*x)}else{Err("buffer index".into())}};
             return Ok(match method {
                 "len"=>V::U32(b.len()),"freeze"=>V::List(b.freeze_handle()),"pop"=>V::Buffer(b.pop()),
+                "range"=>V::Buffer(b.range_handle(index(&a[1])?,index(&a[2])?)),
                 "contains"=>V::Bool(index(&a[1])?<b.len()),"get"=>b.get(index(&a[1])?).ok_or("buffer index outside bounds")?,
                 "set"=>V::Buffer(b.set(index(&a[1])?,a[2].clone())),"swap"=>V::Buffer(b.swap(index(&a[1])?,index(&a[2])?)),
                 "fill_range"=>{let start=index(&a[1])?;let count=index(&a[2])?.min(b.len().saturating_sub(start));let cost=(count as u64).saturating_mul(1+a[3].weight() as u64);if cost>self.fuel{return Err("Ink execution budget exhausted".into())};self.fuel-=cost;V::Buffer(b.fill_range(start,count,a[3].clone()))},

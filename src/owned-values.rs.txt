@@ -8,6 +8,17 @@ enum InkBufferStorage<T> {
 }
 #[derive(Clone, Debug)]
 pub struct OwnedBuffer<T>(InkBufferStorage<T>);
+pub struct BorrowedBuffer<'a,T>(&'a[T]);
+impl<T:Clone> BorrowedBuffer<'_,T> {
+    pub fn len(&self)->u32 {self.0.len().try_into().expect("buffer exceeds u32")}
+    pub fn get(&self,i:u32)->Option<T> {self.0.get(i as usize).cloned()}
+    pub fn with_item<R>(&self,i:u32,f:impl FnOnce(Option<&T>)->R)->R {f(self.0.get(i as usize))}
+    pub unsafe fn get_unchecked(&self,i:u32)->T {unsafe{self.0.get_unchecked(i as usize).clone()}}
+    pub fn with_range<R>(&self,start:u32,count:u32,f:impl FnOnce(BorrowedBuffer<'_,T>)->R)->R {
+        let start=(start as usize).min(self.0.len());let count=(count as usize).min(self.0.len()-start);
+        f(BorrowedBuffer(&self.0[start..start+count]))
+    }
+}
 impl<T:Clone> OwnedBuffer<T> {
     pub fn new(xs:Vec<T>)->Self { Self(InkBufferStorage::Owned(xs)) }
     // Opaque native handles are invocation-local aliases, not source owners.
@@ -25,6 +36,21 @@ impl<T:Clone> OwnedBuffer<T> {
     pub fn len(&self)->u32 {let n=match &self.0 {InkBufferStorage::Owned(xs)=>xs.len(),InkBufferStorage::Shared{start,end,..}=>end-start};n.try_into().expect("buffer exceeds u32")}
     pub fn get(&self,i:u32)->Option<T>{self.read(|xs|xs.get(i as usize).cloned())}
     pub fn with_item<R>(&self,i:u32,f:impl FnOnce(Option<&T>)->R)->R {self.read(|xs|f(xs.get(i as usize)))}
+    pub fn with_range<R>(&self,start:u32,count:u32,f:impl FnOnce(BorrowedBuffer<'_,T>)->R)->R {
+        self.read(|xs|{let start=(start as usize).min(xs.len());let count=(count as usize).min(xs.len()-start);f(BorrowedBuffer(&xs[start..start+count]))})
+    }
+    // Opaque handles already use shared storage. These invocation-local views
+    // are readonly in checked source and retain the original logical bounds.
+    pub fn range_handle(&self,start:u32,count:u32)->Self {
+        match &self.0 {
+            InkBufferStorage::Shared{data,start:base,end}=> {
+                let start=*base+(start as usize).min(*end-*base);
+                let end=start+(count as usize).min(*end-start);
+                Self(InkBufferStorage::Shared{data:data.clone(),start,end})
+            },
+            InkBufferStorage::Owned(_)=>self.read(|xs|{let start=(start as usize).min(xs.len());let count=(count as usize).min(xs.len()-start);Self::shared(xs[start..start+count].to_vec())}),
+        }
+    }
     pub unsafe fn get_unchecked(&self,i:u32)->T {self.read(|xs|unsafe{xs.get_unchecked(i as usize).clone()})}
     pub fn set(mut self,i:u32,value:T)->Self {self.edit(|xs|if let Some(x)=xs.get_mut(i as usize){*x=value});self}
     pub fn swap(mut self,a:u32,b:u32)->Self {self.edit(|xs|if (a as usize)<xs.len()&&(b as usize)<xs.len(){xs.swap(a as usize,b as usize)});self}
@@ -330,6 +356,14 @@ impl<T:Clone> DirectBuffer<T> {
     pub fn len(&self)->u32 {self.0.len().try_into().expect("buffer exceeds u32")}
     pub fn get(&self,i:u32)->Option<T>{self.0.get(i as usize).cloned()}
     pub fn with_item<R>(&self,i:u32,f:impl FnOnce(Option<&T>)->R)->R{f(self.0.get(i as usize))}
+    pub fn with_range<R>(&self,start:u32,count:u32,f:impl FnOnce(BorrowedBuffer<'_,T>)->R)->R {
+        let start=(start as usize).min(self.0.len());let count=(count as usize).min(self.0.len()-start);
+        f(BorrowedBuffer(&self.0[start..start+count]))
+    }
+    pub fn range_handle(&self,start:u32,count:u32)->Self {
+        let start=(start as usize).min(self.0.len());let count=(count as usize).min(self.0.len()-start);
+        Self::new(self.0[start..start+count].to_vec())
+    }
     pub unsafe fn get_unchecked(&self,i:u32)->T{self.0.get_unchecked(i as usize).clone()}
     pub fn set(mut self,i:u32,v:T)->Self{if let Some(x)=self.0.get_mut(i as usize){*x=v;}self}
     pub fn swap(mut self,a:u32,b:u32)->Self{if(a as usize)<self.0.len()&&(b as usize)<self.0.len(){self.0.swap(a as usize,b as usize);}self}

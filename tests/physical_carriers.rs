@@ -1,6 +1,28 @@
 #![allow(dead_code)]
 include!("../src/owned-values.rs.txt");
 #[test]
+fn scoped_views_share_payloads_and_clip_nested_ranges_without_changing_owners() {
+    let input=vec![String::from("a"),String::from("b"),String::from("c")];
+    let direct=DirectBuffer::new(input.clone());
+    let pointer=direct.0.as_ptr();
+    let result=direct.with_range(1,u32::MAX,|view| {
+        assert_eq!(view.0.as_ptr(),unsafe{pointer.add(1)});
+        assert_eq!(view.len(),2);assert_eq!(view.get(0).as_deref(),Some("b"));
+        view.with_range(1,1,|inner|inner.get(0))
+    });
+    assert_eq!(result.as_deref(),Some("c"));assert_eq!(direct.freeze(),input);
+    let owner=OwnedBuffer::new(vec![1,2,3,4]);
+    let (left,right)=owner.split(2);
+    assert_eq!(right.with_range(1,u32::MAX,|view|view.get(0)),Some(4));
+    assert_eq!(left.with_range(u32::MAX,u32::MAX,|view|view.len()),0);
+    assert_eq!(left.append(right).freeze(),vec![1,2,3,4]);
+    let owner=OwnedBuffer::shared(vec![1,2,3]);
+    let view=owner.range_handle(1,1);
+    assert!(matches!((&owner.0,&view.0),(InkBufferStorage::Shared{data:a,..},InkBufferStorage::Shared{data:b,..})if std::rc::Rc::ptr_eq(a,b)));
+    assert_eq!(view.get(0),Some(2));drop(view);
+    assert_eq!(owner.push(4).freeze_handle(),vec![1,2,3,4]);
+}
+#[test]
 fn direct_owner_bulk_edits_match_snapshot_oracle_and_partition_order() {
     for len in [0, 1, 2, 63, 64, 65, 257] {
         for a in [0, 1, 64, u32::MAX] {
