@@ -390,3 +390,19 @@ impl PackedBits{
  pub fn set(&mut self,i:usize,x:bool){assert!(i<self.len);let mask=1u64<<(i%64);let w=&mut self.words[i/64];*w=(*w&!mask)|if x{mask}else{0};}
  pub fn truncate(&mut self,n:usize){self.len=self.len.min(n);self.words.truncate(self.len.div_ceil(64));if self.len%64!=0{if let Some(last)=self.words.last_mut(){*last&=(1u64<<(self.len%64))-1;}}}
 }
+
+// Fixed scalar/text execution support. Float arithmetic canonicalises NaNs.
+pub fn ink_sqrt(x:f32)->f32{ink_f32(x.sqrt())}
+pub fn ink_f32_div(x:f32,y:f32)->f32{ink_f32(x/y)}
+pub fn ink_floor(x:f32)->f32{ink_f32(x.floor())}
+pub fn ink_ceil(x:f32)->f32{ink_f32(x.ceil())}
+pub fn ink_trunc(x:f32)->f32{ink_f32(x.trunc())}
+pub fn ink_round_ties_even(x:f32)->f32{ink_f32(x.round_ties_even())}
+pub fn ink_u32_from_f32(x:f32)->Option<u32>{let x=x.trunc();(x.is_finite()&&x>=0.0&&x<4294967296.0).then(||x as u32)}
+pub fn ink_u64_from_f32(x:f32)->Option<u64>{let x=x.trunc();(x.is_finite()&&x>=0.0&&x<18446744073709551616.0).then(||x as u64)}
+pub fn ink_i32_from_f32(x:f32)->Option<i32>{let x=x.trunc();(x.is_finite()&&x>=-2147483648.0&&x<2147483648.0).then(||x as i32)}
+pub fn ink_string_byte_len(x:&str)->u32{x.len().try_into().expect("String exceeds U32 byte length")}
+pub fn ink_string_byte_at(x:&str,i:u32)->Option<u32>{x.as_bytes().get(i as usize).map(|b|*b as u32)}
+pub fn ink_string_slice(x:&str,a:u32,b:u32)->Option<String>{x.get(a as usize..b as usize).map(str::to_owned)}
+pub fn ink_string_concat(a:&str,b:&str)->String{assert!(a.len().checked_add(b.len()).is_some_and(|n|n<=u32::MAX as usize),"String exceeds U32 byte length");format!("{a}{b}")}
+pub fn ink_string_find(x:&str,needle:&str,from:u32)->Option<u32>{x.get(from as usize..).and_then(|s|s.find(needle)).map(|i|from+i as u32)}
