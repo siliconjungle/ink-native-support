@@ -31,3 +31,10 @@ allocations, invalid handles and execution fuel in addition to target parity.
 
 Project code and documentation are [MIT licensed](LICENSE). Third-party dependencies,
 vendored projects and research data retain their own licenses and notices.
+
+Generic binary pure-call support is separate from JSON text and state transaction
+reports. Generated signatures bind argument/result schemas; `call_binary` uses the
+ABI's bounded codec, and optional `lang_call_binary` returns raw result bytes.
+Networking stays external. Recursive checkpoint schemas use the core's shared
+cycle facts and bounded Bind/Ref expansion, including recursive records in state
+and event payloads. These are operationally trusted support implementations.

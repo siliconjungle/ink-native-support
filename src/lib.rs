@@ -7,3 +7,7 @@ pub const REPRESENTATION_EXPORTS_RUST_SOURCE: &str = include_str!("representatio
 
 pub const INDEXED_TABLE_RUST_SOURCE: &str = include_str!("indexed-table.rs.txt");
 pub const CONTINUATION_FRAMES_RUST_SOURCE: &str = include_str!("continuation-frames.rs.txt");
+
+pub const BINARY_VALUES_RUST_SOURCE: &str = include_str!("binary-values.rs.txt");
+
+pub const BINARY_EXPORTS_RUST_SOURCE: &str = include_str!("binary-exports.rs.txt");

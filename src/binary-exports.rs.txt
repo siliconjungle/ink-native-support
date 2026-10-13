@@ -1,0 +1,6 @@
+// Optional raw binary extension. Arguments and results bind compiled schemas;
+// the existing registry owns handles and reports UTF-8 errors through lang_error.
+#[no_mangle]
+pub extern "C" fn lang_call_binary(state:u32,function:u32,arguments:u32)->u32{
+ state_wasm::invoke_bytes(state,arguments,|s,bytes|s.call_binary(State::binary_function(function)?,bytes,ValueWireLimits::default()))
+}

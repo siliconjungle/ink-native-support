@@ -1,0 +1,24 @@
+// Generic pure-call binary boundary. Types and schema identities are emitted
+// from the complete checked source. This adapter does no networking.
+impl State {
+ fn binary_schema_map()->&'static std::collections::BTreeMap<String,(value_wire::Schema,value_wire::Schema)>{
+  static SCHEMAS:std::sync::OnceLock<std::collections::BTreeMap<String,(value_wire::Schema,value_wire::Schema)>>=std::sync::OnceLock::new();
+  SCHEMAS.get_or_init(||{
+   let manifest:Json=serde_json::from_str(INK_WIRE_CONTRACT).expect("compiled wire metadata");
+   manifest["functions"].as_object().expect("compiled functions").iter().filter(|(_,v)|v.get("unsupported").is_none()).map(|(name,v)|{
+    (name.clone(),(value_wire::Schema::from_descriptor(&v["arguments"]).expect("compiled argument schema"),value_wire::Schema::from_descriptor(&v["result"]).expect("compiled result schema")))
+   }).collect()
+  })
+ }
+ pub fn binary_schemas(name:&str)->Result<&'static (value_wire::Schema,value_wire::Schema),String>{Self::binary_schema_map().get(name).ok_or("unsupported binary function".into())}
+ pub fn binary_function(index:u32)->Result<&'static str,String>{Self::binary_schema_map().keys().nth(index as usize).map(String::as_str).ok_or("unknown binary function index".into())}
+
+ pub fn validate_binary_arguments<'a>(name:&str,bytes:&'a[u8],limits:ValueWireLimits)->Result<value_wire::Validated<'a>,String>{Self::binary_schemas(name)?.0.validate(bytes,limits)}
+ pub fn call_binary(&mut self,name:&str,bytes:&[u8],limits:ValueWireLimits)->Result<Vec<u8>,String>{
+  let (input,output)=Self::binary_schemas(name)?;
+  let record=input.decode(bytes,limits)?;
+  let arguments=input.root()["fields"].as_array().expect("argument record").iter().map(|f|record[f["name"].as_str().unwrap()].clone()).collect::<Vec<_>>();
+  let result=self.binary_call_value(name,&Json::Array(arguments))?;
+  output.encode(&result,limits)
+ }
+}

@@ -253,6 +253,20 @@ mod state_wasm {
             r.envelope(id, result, committed)
         })
     }
+    // A generic raw-byte operation boundary. The optional value-wire export
+    // supplies the operation; representation runtimes need no value-wire code.
+    pub(crate) fn invoke_bytes(state:u32,request:u32,operation:impl FnOnce(&mut State,&[u8])->Result<Vec<u8>,String>)->u32{
+        REGISTRY.with(|registry|{
+            let mut r=registry.borrow_mut();
+            let id=match r.reserve_output(){Ok(id)=>id,Err(e)=>return r.fail(e)};
+            let result=(||{
+                let Registry{states,buffers,..}=&mut *r;
+                let bytes=buffers.get(&request).ok_or("unknown buffer handle")?;
+                operation(states.get_mut(&state).ok_or("unknown state handle")?,bytes)
+            })();
+            match result{Ok(bytes) if bytes.len()<=MAX_BUFFER=>r.finish(id,bytes),Ok(_)=>{r.buffers.remove(&id);r.fail("ABI binary output limit")},Err(e)=>{r.buffers.remove(&id);r.fail(e)}}
+        })
+    }
     #[no_mangle]
     pub extern "C" fn lang_events(state: u32) -> u32 {
         REGISTRY.with(|r| {

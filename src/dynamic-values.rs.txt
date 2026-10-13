@@ -1290,7 +1290,8 @@ impl State {
         Ok(s)
     }
 }
-fn snapshot_schema(t: &Json, meta: &Json) -> R<portable::Schema> {
+fn snapshot_schema(t:&Json,meta:&Json,stack:&mut Vec<String>,budget:&mut usize,depth:usize)->R<portable::Schema>{
+    if depth>128||*budget==0{return Err("snapshot schema resource limit".into());}*budget-=1;
     use portable::Schema as S;
     Ok(if let Some(n) = t.as_str() {
         match n {
@@ -1310,29 +1311,28 @@ fn snapshot_schema(t: &Json, meta: &Json) -> R<portable::Schema> {
             .and_then(|o| o.iter().next())
             .ok_or("schema")?;
         match kind.as_str() {
-            "List" => S::List(Box::new(snapshot_schema(v, meta)?)),
+            "List" => S::List(Box::new(snapshot_schema(v,meta,stack,budget,depth+1)?)),
             "Vector" => S::Vector(
-                Box::new(snapshot_schema(&v[0], meta)?),
+                Box::new(snapshot_schema(&v[0],meta,stack,budget,depth+1)?),
                 u8::try_from(v[1].as_u64().ok_or("vector dimension")?)
                     .map_err(|_| "vector dimension")?,
             ),
-            "Option" => S::Option(Box::new(snapshot_schema(v, meta)?)),
+            "Option" => S::Option(Box::new(snapshot_schema(v,meta,stack,budget,depth+1)?)),
             "Result" => S::Result(
-                Box::new(snapshot_schema(&v[0], meta)?),
-                Box::new(snapshot_schema(&v[1], meta)?),
+                Box::new(snapshot_schema(&v[0],meta,stack,budget,depth+1)?),
+                Box::new(snapshot_schema(&v[1],meta,stack,budget,depth+1)?),
             ),
             "Named" => {
                 let n = v.as_str().ok_or("named schema")?;
                 if meta["ids"].as_array().unwrap().iter().any(|id| id == n) {
                     S::Id
                 } else if let Some(fs) = meta["records"].get(n).and_then(Json::as_array) {
-                    S::Record(
-                        fs.iter()
-                            .map(|f| {
-                                Ok((f[0].as_str().unwrap().into(), snapshot_schema(&f[1], meta)?))
-                            })
-                            .collect::<R<Vec<_>>>()?,
-                    )
+                    if stack.iter().any(|name|name==n){return Ok(S::Ref(n.into()));}
+                    stack.push(n.into());
+                    let fields=fs.iter().map(|f|Ok((f[0].as_str().unwrap().into(),snapshot_schema(&f[1],meta,stack,budget,depth+1)?))).collect::<R<Vec<_>>>()?;
+                    stack.pop();
+                    let body=S::Record(fields);
+                    if meta["recursive_records"].as_array().is_some_and(|names|names.iter().any(|name|name==n)){S::Bind(n.into(),Box::new(body))}else{body}
                 } else {
                     S::Enum(
                         meta["enums"][n]
@@ -1349,6 +1349,7 @@ fn snapshot_schema(t: &Json, meta: &Json) -> R<portable::Schema> {
     })
 }
 fn snapshot_layout(meta: &Json) -> R<portable::Layout> {
+    let mut stack=vec![];let mut budget=100_000;
     let mut roots = meta["roots"].as_array().unwrap().iter().collect::<Vec<_>>();
     roots.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Ok(portable::Layout {
@@ -1361,8 +1362,8 @@ fn snapshot_layout(meta: &Json) -> R<portable::Layout> {
             .map(|r| {
                 Ok((
                     r["name"].as_str().unwrap().into(),
-                    snapshot_schema(&r["type"]["Table"][0], meta)?,
-                    snapshot_schema(&r["type"]["Table"][1], meta)?,
+                    snapshot_schema(&r["type"]["Table"][0],meta,&mut stack,&mut budget,0)?,
+                    snapshot_schema(&r["type"]["Table"][1],meta,&mut stack,&mut budget,0)?,
                 ))
             })
             .collect::<R<_>>()?,
@@ -1370,7 +1371,7 @@ fn snapshot_layout(meta: &Json) -> R<portable::Layout> {
             .as_object()
             .unwrap()
             .iter()
-            .map(|(n, t)| Ok((n.clone(), snapshot_schema(t, meta)?)))
+            .map(|(n, t)| Ok((n.clone(), snapshot_schema(t,meta,&mut stack,&mut budget,0)?)))
             .collect::<R<_>>()?,
     })
 }
