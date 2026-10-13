@@ -358,7 +358,7 @@ impl InkContext {
             let expected=match op {"string_byte_len"=>1,"string_byte_at"|"string_concat"=>2,_=>3};
             if handles.len()!=expected{return Err("string primitive arity".into());}
             let text=self.borrowed_value(handles[0])?;let V::String(text)=text.as_ref()else{return Err("expected String".into());};
-            let u=|i|if let V::U32(x)=self.value(handles[i])?{Ok(x)}else{Err("expected U32".into())};
+            let u=|i:usize| -> R<u32> {if let V::U32(x)=self.value(handles[i])?{Ok(x)}else{Err("expected U32".into())}};
             let option=|x:Option<V>|V::Option(x.map(Box::new));
             return Ok(Some(match op {
                 "string_byte_len"=>V::U32(temporary::ink_string_byte_len(text)),
