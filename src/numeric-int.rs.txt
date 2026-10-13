@@ -1,0 +1,16 @@
+
+pub fn ink_int_from_f32(x:f32)->Option<num_bigint::BigInt>{
+ if !x.is_finite(){return None;}let b=x.to_bits();let e=((b>>23)&255) as i32-127;
+ if e<0{return Some(0.into());}let m=(b&0x7fffff)|0x800000;let n=num_bigint::BigInt::from(m);
+ let v=if e>=23{n<<((e-23) as usize)}else{n>>((23-e) as usize)};
+ Some(if b&0x80000000!=0{-v}else{v})
+}
+pub fn ink_f32_from_int(x:&num_bigint::BigInt)->f32{
+ use num_bigint::{BigUint,Sign};let a=x.magnitude();let bits=a.bits();let sign=if x.sign()==Sign::Minus{0x80000000}else{0};
+ if bits==0{return 0.0;}if bits<=24{let n=a.to_u32_digits()[0] as f32;return if sign==0{n}else{-n};}
+ if bits>128{return f32::from_bits(sign|0x7f800000);}
+ let shift=(bits-24) as usize;let q=a>>shift;let mut m=q.to_u32_digits()[0];let rem=a-(&q<<shift);let half=BigUint::from(1u32)<<(shift-1);
+ if rem>half||(rem==half&&m&1!=0){m+=1;}let mut e=bits as u32-1+127;
+ if m==0x1000000{m>>=1;e+=1;}if e>=255{return f32::from_bits(sign|0x7f800000);}
+ f32::from_bits(sign|(e<<23)|(m&0x7fffff))
+}
