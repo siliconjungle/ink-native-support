@@ -1,6 +1,28 @@
 #![allow(dead_code)]
 include!("../src/owned-values.rs.txt");
 #[test]
+fn direct_push_preserves_owned_elements_across_growth_and_zero_sized_limit(){
+    #[derive(Clone)]
+    struct Tracked(std::rc::Rc<std::cell::Cell<usize>>,usize);
+    impl Drop for Tracked {fn drop(&mut self){self.0.set(self.0.get()+1);}}
+    let drops=std::rc::Rc::new(std::cell::Cell::new(0));
+    let mut owner=DirectBuffer::new(Vec::with_capacity(3));
+    let initial=owner.0.as_ptr();
+    for i in 0..257{
+        owner=owner.push(Tracked(drops.clone(),i));
+        if i<3{assert_eq!(owner.0.as_ptr(),initial);}
+        assert_eq!(drops.get(),0);
+    }
+    let values=owner.freeze();
+    assert_eq!(values.iter().map(|v|v.1).collect::<Vec<_>>(),(0..257).collect::<Vec<_>>());
+    drop(values);assert_eq!(drops.get(),257);
+    // Zero-sized elements exercise the real u32 length limit without allocating
+    // gigabytes or changing the production limit for the test.
+    let edge=DirectBuffer::new(vec![();u32::MAX as usize-1]).push(());
+    assert_eq!(edge.len(),u32::MAX);
+    assert!(std::panic::catch_unwind(||edge.push(())).is_err());
+}
+#[test]
 fn scoped_views_share_payloads_and_clip_nested_ranges_without_changing_owners() {
     let input=vec![String::from("a"),String::from("b"),String::from("c")];
     let direct=DirectBuffer::new(input.clone());

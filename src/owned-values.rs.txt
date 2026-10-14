@@ -380,7 +380,20 @@ impl<T:Clone> DirectBuffer<T> {
     pub fn filter_inplace(mut self,mut f:impl FnMut(T)->bool)->Self{self.0.retain(|v|f(v.clone()));self}
     pub fn truncate(mut self,n:u32)->Self{self.0.truncate(n as usize);self}
     pub fn pop(mut self)->Self{self.0.pop();self}
-    pub fn push(mut self,v:T)->Self{assert!(self.0.len()<u32::MAX as usize,"buffer length exhausted");self.0.push(v);self}
+    pub fn push(mut self,v:T)->Self{
+        if self.0.len()>=u32::MAX as usize{return self.length_exhausted(v);}
+        // Keep the consuming owner's allocation path out of the hot loop. A
+        // separate call lets the host compiler retain the vector in registers
+        // between pushes without changing its capacity or element semantics.
+        if self.0.len()==self.0.capacity(){return self.grow_and_push(v);}
+        self.0.push(v);self
+    }
+    #[cold]
+    #[inline(never)]
+    fn length_exhausted(self,_v:T)->Self{panic!("buffer length exhausted")}
+    #[cold]
+    #[inline(never)]
+    fn grow_and_push(mut self,v:T)->Self{self.0.push(v);self}
     pub fn split(mut self,at:u32)->(Self,Self){let right=self.0.split_off((at as usize).min(self.0.len()));(self,Self(right))}
     pub fn append(mut self,mut other:Self)->Self{self.0.append(&mut other.0);self}
     pub fn freeze(self)->Vec<T>{self.0}
