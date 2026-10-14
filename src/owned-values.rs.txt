@@ -342,7 +342,9 @@ fn ink_parallel_start_receipt(){INK_PARALLEL_RECEIPT.lock().expect("parallel rec
 fn ink_parallel_record_thread(){let mut r=INK_PARALLEL_RECEIPT.lock().expect("parallel receipt lock");r.0+=1;let id=format!("{:?}",std::thread::current().id());r.1.insert(id.clone());r.2.insert(id);}
 pub fn ink_parallel_statistics()->(u64,Vec<String>,Vec<String>){let r=INK_PARALLEL_RECEIPT.lock().expect("parallel receipt lock");(r.0,r.1.iter().cloned().collect(),r.2.iter().cloned().collect())}
 
-#[inline(never)]
+// Rust's ordinary (non-fast-math) f32 operations retain their separate rounding
+// points after inlining. Keep NaN canonicalisation visible to vectorisation.
+#[inline]
 pub fn ink_f32(value:f32)->f32{if value.is_nan(){f32::from_bits(0x7fc00000)}else{value}}
 
 // An explicit private-vector representation of the same affine Buffer value.
