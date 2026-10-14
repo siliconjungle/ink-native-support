@@ -152,3 +152,32 @@ fn capacity_failures_leave_packed_columns_readable() {
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(||bits.reserve(usize::MAX))).is_err());assert!(bits.get(0));
     let mut other=PackedWords::<8,32>::default();other.push(65536);words.prepare_append(&other);assert_eq!(words.get(0),7);words.push(other.get(0));assert_eq!(words.get(1),65536);
 }
+
+#[test]
+fn copy_elements_use_snapshot_semantics_with_clipping_and_shared_ranges() {
+    fn check<T:Copy+PartialEq+std::fmt::Debug>(xs:Vec<T>){
+        for source in [0,1,3,5,u32::MAX]{for destination in [0,1,2,5,u32::MAX]{for count in [0,1,3,7,u32::MAX]{
+            let a=(source as usize).min(xs.len());let b=(destination as usize).min(xs.len());
+            let n=(count as usize).min(xs.len()-a).min(xs.len()-b);
+            let mut want=xs.clone();for i in 0..n{want[b+i]=xs[a+i];}
+            assert_eq!(DirectBuffer::new(xs.clone()).copy_within_copy(source,destination,count).freeze(),want);
+            assert_eq!(OwnedBuffer::new(xs.clone()).copy_within_copy(source,destination,count).freeze(),want);
+        }}}
+    }
+    check(vec![] as Vec<u32>);check(vec![0u32,1,2,u32::MAX,4,5,6]);
+    check(vec![0u64,1,u64::MAX,3,4,5,6]);check(vec![i32::MIN,-1,0,1,i32::MAX]);
+    check(vec![false,true,true,false,true,false]);check(vec![();7]);
+    let (left,right)=OwnedBuffer::new(vec![0u32,1,2,3,4,5]).split(3);
+    let left=left.copy_within_copy(0,1,u32::MAX);let right=right.copy_within_copy(1,0,u32::MAX);
+    assert_eq!(left.append(right).freeze(),vec![0,0,1,4,5,5]);
+    // Float transfer must preserve NaN payloads and signed zero exactly.
+    let bits=vec![0x7fc01234u32,0x80000000,0,0xffc00001,0x3f800000];
+    let floats=bits.iter().copied().map(f32::from_bits).collect::<Vec<_>>();
+    let want=vec![bits[0],bits[0],bits[1],bits[2],bits[3]];
+    for got in [DirectBuffer::new(floats.clone()).copy_within_copy(0,1,4).freeze(),
+                OwnedBuffer::new(floats).copy_within_copy(0,1,4).freeze()]{
+        assert_eq!(got.into_iter().map(f32::to_bits).collect::<Vec<_>>(),want);
+    }
+    let strings=vec!["a".to_string(),"b".to_string(),"c".to_string()];
+    assert_eq!(DirectBuffer::new(strings).copy_within(0,1,2).freeze(),vec!["a","a","b"]);
+}

@@ -66,6 +66,13 @@ impl<T:Clone> OwnedBuffer<T> {
             else {for i in 0..count{xs[destination+i]=xs[source+i].clone();}}
         });self
     }
+    pub fn copy_within_copy(mut self,source:u32,destination:u32,count:u32)->Self where T:Copy {
+        self.edit(|xs|{
+            let a=(source as usize).min(xs.len());let b=(destination as usize).min(xs.len());
+            let n=(count as usize).min(xs.len()-a).min(xs.len()-b);
+            xs.copy_within(a..a+n,b);
+        });self
+    }
     pub fn map_inplace(mut self,mut f:impl FnMut(T)->T)->Self {self.edit(|xs|for x in xs{*x=f(x.clone())});self}
     pub fn map_indexed_inplace(mut self,mut f:impl FnMut(u32,T)->T)->Self {self.edit(|xs|for(i,x)in xs.iter_mut().enumerate(){*x=f(i as u32,x.clone())});self}
     pub fn scan_inplace(mut self,acc:T,mut f:impl FnMut(T,T)->T)->Self {let mut state=Some(acc);self.edit(|xs|for x in xs{let next=f(state.take().expect("scan state"),x.clone());*x=next.clone();state=Some(next)});self}
@@ -373,6 +380,11 @@ impl<T:Clone> DirectBuffer<T> {
     pub fn copy_within(mut self,source:u32,destination:u32,count:u32)->Self{
         let a=(source as usize).min(self.0.len());let b=(destination as usize).min(self.0.len());let n=(count as usize).min(self.0.len()-a).min(self.0.len()-b);
         if b>a {for i in (0..n).rev(){self.0[b+i]=self.0[a+i].clone();}}else if a!=b {for i in 0..n{self.0[b+i]=self.0[a+i].clone();}}self
+    }
+    pub fn copy_within_copy(mut self,source:u32,destination:u32,count:u32)->Self where T:Copy {
+        let a=(source as usize).min(self.0.len());let b=(destination as usize).min(self.0.len());
+        let n=(count as usize).min(self.0.len()-a).min(self.0.len()-b);
+        self.0.copy_within(a..a+n,b);self
     }
     pub fn map_inplace(mut self,mut f:impl FnMut(T)->T)->Self{for v in &mut self.0{*v=f(v.clone());}self}
     pub fn map_indexed_inplace(mut self,mut f:impl FnMut(u32,T)->T)->Self{for(i,v)in self.0.iter_mut().enumerate(){*v=f(i as u32,v.clone());}self}

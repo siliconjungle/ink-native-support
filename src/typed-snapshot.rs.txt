@@ -1,0 +1,29 @@
+
+struct TypedSnapshotWriter{out:Vec<u8>,left:usize,limits:SnapshotLimits}
+impl TypedSnapshotWriter{
+ fn new(limits:SnapshotLimits)->Self{Self{out:vec![],left:limits.values,limits}}
+ fn tick(&mut self,depth:usize)->Result<(),String>{if self.left==0||depth>self.limits.depth{return Err("snapshot value/depth limit exceeded".into())}self.left-=1;Ok(())}
+ fn bytes(&mut self,bytes:&[u8])->Result<(),String>{self.out.extend_from_slice(bytes);Ok(())}
+ fn value_end(&self)->Result<(),String>{if self.out.len()>self.limits.bytes{return Err("snapshot byte limit exceeded".into())}Ok(())}
+ fn count(&mut self,n:usize)->Result<(),String>{self.bytes(&(n as u64).to_le_bytes())}
+ fn rows(&mut self,n:usize)->Result<(),String>{if n>self.left/2{return Err("snapshot row limit exceeded".into())}self.count(n)}
+ fn list_length(&mut self,n:usize)->Result<(),String>{if n>self.left{return Err("snapshot value limit exceeded".into())}self.count(n)}
+ fn raw(&mut self,bytes:&[u8])->Result<(),String>{self.count(bytes.len())?;self.bytes(bytes)}
+ fn integer(&mut self,n:&BigInt)->Result<(),String>{if n.bits()>8*portable::MAX_INT_BYTES as u64{return Err("snapshot Int exceeds size limit".into())}let(sign,bytes)=n.to_bytes_le();self.bytes(&[match sign{num_bigint::Sign::NoSign=>0,num_bigint::Sign::Plus=>1,num_bigint::Sign::Minus=>2}])?;self.raw(if sign==num_bigint::Sign::NoSign{&[]}else{&bytes})}
+ fn finish(self,layout:&portable::Layout)->Result<Vec<u8>,String>{use sha2::{Digest,Sha256};if 84usize.checked_add(self.out.len()).and_then(|n|n.checked_add(32)).is_none_or(|n|n>self.limits.bytes){return Err("snapshot byte limit exceeded".into())}let mut bytes=Vec::new();bytes.extend_from_slice(b"VLSTATE\0");bytes.extend_from_slice(&[1,0,1,0]);bytes.extend_from_slice(&layout.program);bytes.extend_from_slice(&layout.schema);bytes.extend_from_slice(&(self.out.len()as u64).to_le_bytes());bytes.extend_from_slice(&self.out);let digest=Sha256::digest(&bytes);bytes.extend_from_slice(&digest);Ok(bytes)}
+}
+struct TypedSnapshotReader<'a>{bytes:&'a [u8],at:usize,left:usize,limits:SnapshotLimits}
+impl<'a> TypedSnapshotReader<'a>{
+ fn new(layout:&portable::Layout,bytes:&'a [u8],limits:SnapshotLimits)->Result<Self,String>{use sha2::{Digest,Sha256};if bytes.len()>limits.bytes||bytes.len()<116{return Err("snapshot byte length invalid".into())}if &bytes[..8]!=b"VLSTATE\0"||bytes[8..12]!=[1,0,1,0]{return Err("snapshot format or semantics version mismatch".into())}if bytes[12..44]!=layout.program||bytes[44..76]!=layout.schema{return Err("snapshot program or schema identity mismatch".into())}let n=usize::try_from(u64::from_le_bytes(bytes[76..84].try_into().unwrap())).map_err(|_|"snapshot length not addressable")?;if 84usize.checked_add(n).and_then(|v|v.checked_add(32))!=Some(bytes.len()){return Err("snapshot payload length mismatch".into())}let end=bytes.len()-32;if Sha256::digest(&bytes[..end]).as_slice()!=&bytes[end..]{return Err("snapshot integrity check failed".into())}Ok(Self{bytes:&bytes[84..end],at:0,left:limits.values,limits})}
+ fn tick(&mut self,depth:usize)->Result<(),String>{if self.left==0||depth>self.limits.depth{return Err("snapshot value/depth limit exceeded".into())}self.left-=1;Ok(())}
+ fn take(&mut self,n:usize)->Result<&'a [u8],String>{let end=self.at.checked_add(n).ok_or("snapshot length overflow")?;let b=self.bytes.get(self.at..end).ok_or("truncated snapshot")?;self.at=end;Ok(b)}
+ fn byte(&mut self)->Result<u8,String>{Ok(self.take(1)?[0])}
+ fn u32(&mut self)->Result<u32,String>{Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))}
+ fn u64(&mut self)->Result<u64,String>{Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))}
+ fn len(&mut self)->Result<usize,String>{usize::try_from(self.u64()?).map_err(|_|"snapshot length not addressable".into())}
+ fn sequence(&mut self)->Result<usize,String>{let n=self.len()?;if n>self.left{return Err("snapshot value limit exceeded".into())}Ok(n)}
+ fn raw(&mut self)->Result<&'a [u8],String>{let n=self.len()?;self.take(n)}
+ fn boolean(&mut self)->Result<bool,String>{match self.byte()?{0=>Ok(false),1=>Ok(true),_=>Err("invalid Bool tag".into())}}
+ fn integer(&mut self)->Result<BigInt,String>{let sign=self.byte()?;let bytes=self.raw()?;if bytes.len()>portable::MAX_INT_BYTES{return Err("snapshot Int exceeds size limit".into())}let sign=match sign{0 if bytes.is_empty()=>num_bigint::Sign::NoSign,1 if !bytes.is_empty()&&bytes.last()!=Some(&0)=>num_bigint::Sign::Plus,2 if !bytes.is_empty()&&bytes.last()!=Some(&0)=>num_bigint::Sign::Minus,_=>return Err("noncanonical signed integer".into())};Ok(BigInt::from_bytes_le(sign,bytes))}
+ fn finish(self)->Result<(),String>{if self.at!=self.bytes.len(){return Err("trailing snapshot payload".into())}Ok(())}
+}

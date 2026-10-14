@@ -1,0 +1,62 @@
+
+// Immutable snapshots share pages. An edit detaches the page directory and
+// the touched page only; previous transaction/host before-images stay intact.
+#[derive(Clone,Debug)]
+pub struct PagedColumn<T,const PAGE:usize>{
+    length:usize,
+    pages:std::sync::Arc<Vec<std::sync::Arc<Vec<T>>>>,
+}
+impl<T,const PAGE:usize> Default for PagedColumn<T,PAGE>{
+    fn default()->Self{Self{length:0,pages:std::sync::Arc::new(Vec::new())}}
+}
+impl<T:Clone,const PAGE:usize> PagedColumn<T,PAGE>{
+    pub fn with_capacity(n:usize)->Self{
+        assert!(PAGE>0);
+        Self{length:0,pages:std::sync::Arc::new(Vec::with_capacity(n/PAGE+usize::from(n%PAGE!=0)))}
+    }
+    pub fn len(&self)->usize{self.length}
+    pub fn reserve(&mut self,_additional:usize){}
+    pub fn as_ptr(&self)->*const (){std::sync::Arc::as_ptr(&self.pages).cast()}
+    pub unsafe fn get_unchecked(&self,i:usize)->&T{
+        debug_assert!(i<self.length);
+        unsafe{self.pages.get_unchecked(i/PAGE).get_unchecked(i%PAGE)}
+    }
+    pub unsafe fn get_unchecked_mut(&mut self,i:usize)->&mut T{
+        debug_assert!(i<self.length);
+        let pages=std::sync::Arc::make_mut(&mut self.pages);
+        let page=unsafe{pages.get_unchecked_mut(i/PAGE)};
+        unsafe{std::sync::Arc::make_mut(page).get_unchecked_mut(i%PAGE)}
+    }
+    pub fn set_if_changed_by(&mut self,i:usize,value:T,equal:impl FnOnce(&T,&T)->bool)->bool{
+        assert!(i<self.length);
+        if equal(unsafe{self.get_unchecked(i)},&value){return false}
+        unsafe{*self.get_unchecked_mut(i)=value;}
+        true
+    }
+    pub fn push(&mut self,value:T){
+        let length=self.length.checked_add(1).expect("column length overflow");
+        let pages=std::sync::Arc::make_mut(&mut self.pages);
+        if self.length%PAGE==0{pages.push(std::sync::Arc::new(Vec::with_capacity(PAGE)));}
+        std::sync::Arc::make_mut(pages.last_mut().expect("column page")).push(value);
+        self.length=length;
+    }
+    pub fn truncate(&mut self,n:usize){
+        if n>=self.length{return}
+        if n==0{*self=Self::default();return}
+        let pages=std::sync::Arc::make_mut(&mut self.pages);
+        pages.truncate(n/PAGE+usize::from(n%PAGE!=0));
+        if n%PAGE!=0{std::sync::Arc::make_mut(pages.last_mut().unwrap()).truncate(n%PAGE);}
+        self.length=n;
+    }
+    pub fn append(&mut self,other:&mut Self){
+        let length=self.length.checked_add(other.length).expect("column length overflow");
+        if self.length%PAGE==0{
+            let rhs=std::mem::take(other);
+            std::sync::Arc::make_mut(&mut self.pages).extend(rhs.pages.iter().cloned());
+            self.length=length;
+        }else{
+            for i in 0..other.length{self.push(unsafe{other.get_unchecked(i)}.clone());}
+            *other=Self::default();
+        }
+    }
+}

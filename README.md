@@ -38,3 +38,5 @@ ABI's bounded codec, and optional `lang_call_binary` returns raw result bytes.
 Networking stays external. Recursive checkpoint schemas use the core's shared
 cycle facts and bounded Bind/Ref expansion, including recursive records in state
 and event payloads. These are operationally trusted support implementations.
+
+`TYPED_SNAPSHOT_RUST_SOURCE` supplies the direct typed writer/reader for the fixed portable snapshot format. The Rust lowering spells finite schemas over ordinary native values. Readers authenticate the entire framing/digest before decoding; limits, canonical scalars, ordered keys/events and final payload checks retain the shared codec contract. Recursive/column schemas fall back to the shared codec. This support changes allocation and value conversion, without granting algorithm or rewrite authority.

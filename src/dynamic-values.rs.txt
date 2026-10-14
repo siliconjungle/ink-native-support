@@ -455,6 +455,13 @@ impl InkContext {
                 _=>return Err("unknown string primitive".into())
             });
         }
+        if op=="word_widen_u32_to_u64" || op=="word_narrow_u64_to_u32" {
+            return match (op,&*a) {
+                ("word_widen_u32_to_u64",[V::U32(x)])=>Ok(V::U64(u64::from(*x))),
+                ("word_narrow_u64_to_u32",[V::U64(x)])=>Ok(V::U32(*x as u32)),
+                _=>Err("word conversion arity or input type".into()),
+            };
+        }
         if ["word_not","word_and","word_or","word_xor","wrapping_shl","wrapping_shr","rotate_left","rotate_right"].contains(&op) {
             macro_rules! apply {($x:expr,$variant:ident)=>{{
                 let x=*$x;
