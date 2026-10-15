@@ -14,6 +14,12 @@ use generated::*;
 use serde_json::json;
 #[test]
 fn shared_typed_support_preserves_wire_bits_and_owned_values() {
+    for bits in [0u64,1<<63,1,0x3ff0000000000001,0x7ff0000000001234,0xfff8000000005678,u64::MAX]{
+        let value=f64::from_json(&json!({"F64Bits":bits.to_string()})).unwrap();
+        assert_eq!(value.to_bits(),bits);
+        assert_eq!(f64::from_json(&value.to_json()).unwrap().to_bits(),bits);
+    }
+    for invalid in [json!({"F64Bits":1}),json!({"F64Bits":"01"}),json!({"F64Bits":"18446744073709551616"}),json!({"F64Bits":"0","extra":true})]{assert!(f64::from_json(&invalid).is_err());}
     for bits in [0u32, 0x80000000, 0x7fc12345, 0x7f800000, 0xff800000] {
         let f = f32::from_json(&json!({"F32Bits":bits})).unwrap();
         let again = f32::from_json(&f.to_json()).unwrap();

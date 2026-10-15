@@ -353,6 +353,16 @@ pub fn ink_parallel_statistics()->(u64,Vec<String>,Vec<String>){let r=INK_PARALL
 // points after inlining. Keep NaN canonicalisation visible to vectorisation.
 #[inline]
 pub fn ink_f32(value:f32)->f32{if value.is_nan(){f32::from_bits(0x7fc00000)}else{value}}
+pub fn ink_f64(value:f64)->f64{if value.is_nan(){f64::from_bits(0x7ff8000000000000)}else{value}}
+pub fn ink_f64_div(x:f64,y:f64)->f64{ink_f64(x/y)}
+pub fn ink_sqrt_f64(x:f64)->f64{ink_f64(x.sqrt())}
+pub fn ink_floor_f64(x:f64)->f64{ink_f64(x.floor())}
+pub fn ink_ceil_f64(x:f64)->f64{ink_f64(x.ceil())}
+pub fn ink_trunc_f64(x:f64)->f64{ink_f64(x.trunc())}
+pub fn ink_round_ties_even_f64(x:f64)->f64{ink_f64(x.round_ties_even())}
+pub fn ink_u32_from_f64(x:f64)->Option<u32>{let x=x.trunc();(x.is_finite()&&x>=0.0&&x<4294967296.0).then(||x as u32)}
+pub fn ink_u64_from_f64(x:f64)->Option<u64>{let x=x.trunc();(x.is_finite()&&x>=0.0&&x<18446744073709551616.0).then(||x as u64)}
+pub fn ink_i32_from_f64(x:f64)->Option<i32>{let x=x.trunc();(x.is_finite()&&x>=-2147483648.0&&x<2147483648.0).then(||x as i32)}
 
 // An explicit private-vector representation of the same affine Buffer value.
 // Splitting copies into independent owners; allocation identity is unobservable.

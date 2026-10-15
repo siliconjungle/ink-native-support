@@ -9,7 +9,7 @@ macro_rules! binary_word {
   fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(&self.to_le_bytes()))}
  }};
 }
-binary_word!(u32,"u32");binary_word!(u64,"u64");binary_word!(i32,"i32");binary_word!(f32,"f32");
+binary_word!(u32,"u32");binary_word!(u64,"u64");binary_word!(i32,"i32");binary_word!(f32,"f32");binary_word!(f64,"f64");
 impl BinaryValue for (){
  fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("unit")?;Ok(())}
  fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|_|Ok(()))}

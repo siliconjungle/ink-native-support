@@ -1,4 +1,19 @@
 
+pub fn ink_int_from_f64(x:f64)->Option<num_bigint::BigInt>{
+ if !x.is_finite(){return None;}let b=x.to_bits();let e=((b>>52)&2047) as i32-1023;
+ if e<0{return Some(0.into());}let m=(b&0xfffffffffffff)|0x10000000000000;let n=num_bigint::BigInt::from(m);
+ let v=if e>=52{n<<((e-52) as usize)}else{n>>((52-e) as usize)};
+ Some(if b&0x8000000000000000!=0{-v}else{v})
+}
+pub fn ink_f64_from_int(x:&num_bigint::BigInt)->f64{
+ use num_bigint::{BigUint,Sign};let a=x.magnitude();let bits=a.bits();let sign=if x.sign()==Sign::Minus{0x8000000000000000}else{0};
+ if bits==0{return 0.0;}if bits<=53{let n=a.to_u64_digits()[0] as f64;return if sign==0{n}else{-n};}
+ if bits>1024{return f64::from_bits(sign|0x7ff0000000000000);}
+ let shift=(bits-53) as usize;let q=a>>shift;let mut m=q.to_u64_digits()[0];let rem=a-(&q<<shift);let half=BigUint::from(1u32)<<(shift-1);
+ if rem>half||(rem==half&&m&1!=0){m+=1;}let mut e=bits-1+1023;
+ if m==0x20000000000000{m>>=1;e+=1;}if e>=2047{return f64::from_bits(sign|0x7ff0000000000000);}
+ f64::from_bits(sign|(e<<52)|(m&0xfffffffffffff))
+}
 pub fn ink_int_from_f32(x:f32)->Option<num_bigint::BigInt>{
  if !x.is_finite(){return None;}let b=x.to_bits();let e=((b>>23)&255) as i32-127;
  if e<0{return Some(0.into());}let m=(b&0x7fffff)|0x800000;let n=num_bigint::BigInt::from(m);

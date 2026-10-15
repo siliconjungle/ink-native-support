@@ -84,6 +84,18 @@ impl Wire for f32 {
   Err("expected finite f32 or F32Bits".into())
  }
 }
+impl Wire for f64 {
+ fn to_json(&self)->Json{if self.is_finite(){json!(self)}else{json!({"F64Bits":self.to_bits().to_string()})}}
+ fn from_json(v:&Json)->Result<Self,String>{
+  if let Some(n)=v.as_f64(){if n.is_finite(){return Ok(n)}return Err("f64 overflow".into())}
+  if let Some(o)=v.as_object(){if o.len()==1{if let Some(s)=o.get("F64Bits").and_then(Json::as_str){
+   if !s.is_empty()&&s.len()<=20&&!(s.len()>1&&s.starts_with('0'))&&s.bytes().all(|c|c.is_ascii_digit()){
+    if let Ok(bits)=s.parse::<u64>(){return Ok(Self::from_bits(bits));}
+   }
+  }}}
+  Err("expected finite f64 or F64Bits decimal string".into())
+ }
+}
 impl<T:Wire,const N:usize> Wire for [T;N] {
  fn to_json(&self)->Json{self.iter().map(Wire::to_json).collect()}
  fn from_json(v:&Json)->Result<Self,String>{let a=v.as_array().ok_or("expected vector")?;if a.len()!=N{return Err("vector dimension mismatch".into())}a.iter().map(T::from_json).collect::<Result<Vec<_>,_>>()?.try_into().map_err(|_|"vector dimension mismatch".into())}
@@ -102,6 +114,7 @@ trait InkDataEq { fn ink_data_eq(&self,other:&Self)->bool; }
 macro_rules! data_eq {($($t:ty),*)=>{$(impl InkDataEq for $t{fn ink_data_eq(&self,other:&Self)->bool{self==other}})*};}
 data_eq!((),bool,u32,u64,i32,BigInt,String,InkArithmeticError);
 impl InkDataEq for f32{fn ink_data_eq(&self,other:&Self)->bool{self.to_bits()==other.to_bits()}}
+impl InkDataEq for f64{fn ink_data_eq(&self,other:&Self)->bool{self.to_bits()==other.to_bits()}}
 impl<T:InkDataEq> InkDataEq for Box<T>{fn ink_data_eq(&self,other:&Self)->bool{(**self).ink_data_eq(&**other)}}
 impl<T:InkDataEq> InkDataEq for Vec<T>{fn ink_data_eq(&self,other:&Self)->bool{self.len()==other.len()&&self.iter().zip(other).all(|(a,b)|a.ink_data_eq(b))}}
 impl<T:InkDataEq,const N:usize> InkDataEq for [T;N]{fn ink_data_eq(&self,other:&Self)->bool{self.iter().zip(other).all(|(a,b)|a.ink_data_eq(b))}}
