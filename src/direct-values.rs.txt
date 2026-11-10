@@ -2,11 +2,20 @@
 pub trait BinaryValue: Sized {
  fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>;
  fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>;
+ /// The elements of a validated list or vector. Fixed-width scalars read
+ /// every value in one pass instead of one validated view per element.
+ fn from_binary_items(v:value_wire::Validated<'_>)->Result<Vec<Self>,String>{v.items()?.map(|x|Self::from_binary(x?)).collect()}
+ fn write_binary_items(xs:&[Self],w:&mut value_wire::Encoder)->Result<(),String>{for x in xs{x.write_binary(w)?;}Ok(())}
 }
 macro_rules! binary_word {
  ($t:ty,$kind:literal) => {impl BinaryValue for $t{
   fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind($kind)?;Ok(Self::from_le_bytes(v.body()?.try_into().map_err(|_|"wire scalar width")?))}
   fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(&self.to_le_bytes()))}
+  fn from_binary_items(v:value_wire::Validated<'_>)->Result<Vec<Self>,String>{
+   const W:usize=std::mem::size_of::<$t>();let (n,items)=v.scalar_items($kind,W)?;
+   let mut out=Vec::with_capacity(n);for frame in items.chunks_exact(4+W){out.push(Self::from_le_bytes(frame[4..].try_into().unwrap()));}Ok(out)
+  }
+  fn write_binary_items(xs:&[Self],w:&mut value_wire::Encoder)->Result<(),String>{w.scalars(xs.iter().map(|x|x.to_le_bytes()))}
  }};
 }
 binary_word!(u32,"u32");binary_word!(u64,"u64");binary_word!(i32,"i32");binary_word!(f32,"f32");binary_word!(f64,"f64");
@@ -17,6 +26,8 @@ impl BinaryValue for (){
 impl BinaryValue for bool{
  fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("bool")?;Ok(v.body()?[0]!=0)}
  fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(&[u8::from(*self)]))}
+ fn from_binary_items(v:value_wire::Validated<'_>)->Result<Vec<Self>,String>{let (_,items)=v.scalar_items("bool",1)?;Ok(items.chunks_exact(5).map(|frame|frame[4]!=0).collect())}
+ fn write_binary_items(xs:&[Self],w:&mut value_wire::Encoder)->Result<(),String>{w.scalars(xs.iter().map(|x|[u8::from(*x)]))}
 }
 impl BinaryValue for String{
  fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("string")?;Ok(v.text()?.to_owned())}
@@ -27,12 +38,12 @@ impl BinaryValue for BigInt{
  fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|w.bytes(self.to_string().as_bytes()))}
 }
 impl<T:BinaryValue> BinaryValue for Vec<T>{
- fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("list")?;v.items()?.map(|x|T::from_binary(x?)).collect()}
- fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|{w.word(self.len().try_into().map_err(|_|"wire sequence size")?)?;for x in self{x.write_binary(w)?;}Ok(())})}
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("list")?;T::from_binary_items(v)}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|{w.word(self.len().try_into().map_err(|_|"wire sequence size")?)?;T::write_binary_items(self,w)})}
 }
 impl<T:BinaryValue,const N:usize> BinaryValue for [T;N]{
- fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("vector")?;v.items()?.map(|x|T::from_binary(x?)).collect::<Result<Vec<_>,_>>()?.try_into().map_err(|_|"wire vector size".into())}
- fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|{w.word(N.try_into().map_err(|_|"wire vector size")?)?;for x in self{x.write_binary(w)?;}Ok(())})}
+ fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{v.require_kind("vector")?;T::from_binary_items(v)?.try_into().map_err(|_|"wire vector size".into())}
+ fn write_binary(&self,w:&mut value_wire::Encoder)->Result<(),String>{w.frame(|w|{w.word(N.try_into().map_err(|_|"wire vector size")?)?;T::write_binary_items(self,w)})}
 }
 impl<T:BinaryValue> BinaryValue for Box<T>{
  fn from_binary(v:value_wire::Validated<'_>)->Result<Self,String>{T::from_binary(v).map(Box::new)}
